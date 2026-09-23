@@ -1,0 +1,4 @@
+module CSGP4 {
+    header "SatelliteSGP4.h"
+    export *
+}
