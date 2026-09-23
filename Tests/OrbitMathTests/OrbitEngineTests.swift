@@ -1,4 +1,5 @@
 import XCTest
+import simd
 @testable import OrbitMath
 
 final class OrbitEngineTests: XCTestCase {
@@ -68,15 +69,60 @@ final class OrbitEngineTests: XCTestCase {
         }
     }
 
-    func testEarthFixedTrajectoryMatchesSamplesAndDoesNotArtificiallyClose() throws {
+    func testISSRingClosesOnMarkerInOneOrbitalPlaneAsTimeAdvances() throws {
         let engine = try OrbitEngine(elements: OrbitalElements.decodeISS(fixture("iss-omm")))
-        let points = try engine.nextOrbit(from: engine.epoch, samples: 12)
-        XCTAssertEqual(points.count, 13)
-        for i in 0...12 {
-            let expected = try engine.state(at: engine.epoch.addingTimeInterval(Double(i) / 12 * engine.elements.periodSeconds))
-            XCTAssertEqual(points[i], expected.scenePosition)
+        for minutes in stride(from: 0.0, through: 100.0, by: 5) {
+            let state = try engine.state(at: engine.epoch.addingTimeInterval(minutes * 60))
+            let points = try state.orbitRing()
+            XCTAssertEqual(points.count, 181)
+            XCTAssertEqual(points.first, state.scenePosition)
+            XCTAssertEqual(points.last, points.first)
+            let normal = simd_normalize(simd_cross(state.temePosition, state.temeVelocity))
+            let sceneNormal = simd_normalize(EarthCoordinates.scenePosition(EarthCoordinates.earthFixed(normal, at: state.date)))
+            for point in points {
+                XCTAssertEqual(simd_dot(point, sceneNormal), 0, accuracy: 2e-7)
+                XCTAssertTrue((1.04...1.09).contains(simd_length(point)))
+            }
+            // The old open track had a ~23-degree gap. Every segment must now
+            // be an ordinary two-degree step, including both sides of the seam.
+            for index in 1..<points.count {
+                XCTAssertLessThan(simd_distance(points[index - 1], points[index]), 0.04)
+            }
+            let next = try engine.state(at: state.date.addingTimeInterval(1))
+            let frame = TrackingFrame(state: state, nextPosition: next.scenePosition,
+                                      interpolates: true, path: points, pathDate: state.date)
+            for fraction in [0.0, 0.5, 1.0] {
+                let marker = frame.position(at: state.date.addingTimeInterval(fraction))
+                let distance = zip(points, points.dropFirst()).map { start, end in
+                    let delta = end - start
+                    let t = min(max(simd_dot(marker - start, delta) / simd_length_squared(delta), 0), 1)
+                    return simd_distance(marker, start + delta * t)
+                }.min()!
+                // Less than 1/10 of the rendered tube radius, including Earth
+                // rotation and linear marker interpolation between one-second ticks.
+                XCTAssertLessThan(distance, 0.00025)
+            }
         }
-        XCTAssertGreaterThan(abs(points[0].x - points[12].x) + abs(points[0].z - points[12].z), 0.01)
+    }
+
+    func testRingPreservesCircularAndEccentricOrbitGeometry() throws {
+        let mu = 398_600.8
+        let date = try XCTUnwrap(UTCDate.parse("2026-09-23T15:30:06Z"))
+        let perigee = 6800.0
+        for eccentricity in [0.0, 0.25] {
+            let speed = sqrt(mu * (1 + eccentricity) / perigee)
+            let position = SIMD3<Double>(perigee, 0, 0)
+            let fixed = EarthCoordinates.earthFixed(position, at: date)
+            let state = OrbitalState(date: date, temePosition: position,
+                                     temeVelocity: [0, speed, 0], earthFixedPosition: fixed,
+                                     latitude: 0, longitude: 0, altitudeKilometers: 421.863)
+            let points = try state.orbitRing(samples: 180)
+            let radii = points.map { Double(simd_length($0)) * EarthCoordinates.equatorialRadius }
+            XCTAssertEqual(try XCTUnwrap(radii.min()), perigee, accuracy: 0.002)
+            XCTAssertEqual(try XCTUnwrap(radii.max()), perigee * (1 + eccentricity) / (1 - eccentricity), accuracy: 0.003)
+            XCTAssertEqual(points.first, points.last)
+            XCTAssertEqual(points.first, state.scenePosition)
+        }
     }
 
     func testInvalidAndUnsupportedInputsAreRejected() throws {

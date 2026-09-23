@@ -316,7 +316,7 @@ struct OrbitScreen: View {
                 Section("Exploring the orbit") {
                     Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the ISS. The satellite marker is enlarged for visibility.")
                     Text("Pause holds the displayed time. Resume and NOW return to the actual current time, including after the app has been in the background.")
-                    Text("The green line shows the next orbital period relative to Earth's rotating surface. Its ends do not join because Earth rotates during that period. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
+                    Text("The green loop shows the ISS’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
                 }
                 Section("How positions are calculated") {
                     Text("SGP4 predicts positions from public mean orbital elements. These are calculated positions, not live telemetry. Maneuvers and aging data can reduce accuracy. Earth lighting is illustrative; visibility footprints are not included yet.")

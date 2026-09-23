@@ -1,5 +1,6 @@
 import CSGP4
 import Foundation
+import simd
 
 struct OrbitalState: Sendable {
     let date: Date
@@ -13,10 +14,37 @@ struct OrbitalState: Sendable {
         sqrt(temeVelocity.x * temeVelocity.x + temeVelocity.y * temeVelocity.y + temeVelocity.z * temeVelocity.z)
     }
     var scenePosition: SIMD3<Float> {
-        // Conventional ECEF: X = Greenwich, Y = 90°E, Z = north.
-        // RealityKit: +X east at Greenwich, +Y north, +Z Greenwich.
-        SIMD3(Float(earthFixedPosition.y), Float(earthFixedPosition.z), Float(earthFixedPosition.x))
-            / Float(EarthCoordinates.equatorialRadius)
+        EarthCoordinates.scenePosition(earthFixedPosition)
+    }
+
+    /// Instantaneous two-body ellipse through the SGP4 state, used only for display.
+    /// All points share this state's Earth rotation; this is not a future ground track.
+    /// The radial basis avoids undefined periapsis angles for a circular orbit.
+    func orbitRing(samples: Int = 180) throws -> [SIMD3<Float>] {
+        precondition(samples >= 4)
+        let mu = 398_600.8 // km³/s²; WGS72, matching the SGP4 propagator.
+        let radius = simd_length(temePosition)
+        let momentum = simd_cross(temePosition, temeVelocity)
+        let momentumSquared = simd_length_squared(momentum)
+        guard radius.isFinite, radius > 0, momentumSquared.isFinite, momentumSquared > 0 else {
+            throw OrbitError.invalidElements
+        }
+        let radial = temePosition / radius
+        let transverse = simd_cross(momentum / sqrt(momentumSquared), radial)
+        let eccentricity = simd_cross(temeVelocity, momentum) / mu - radial
+        guard simd_length_squared(eccentricity).isFinite, simd_length_squared(eccentricity) < 1 else {
+            throw OrbitError.invalidElements
+        }
+        let parameter = momentumSquared / mu
+        var points = [scenePosition]
+        for index in 1..<samples {
+            let angle = Double(index) / Double(samples) * 2 * .pi
+            let direction = radial * cos(angle) + transverse * sin(angle)
+            let position = direction * (parameter / (1 + simd_dot(eccentricity, direction)))
+            points.append(EarthCoordinates.scenePosition(EarthCoordinates.earthFixed(position, at: date)))
+        }
+        points.append(points[0]) // Exact shared seam at the current satellite position.
+        return points
     }
 }
 
@@ -56,15 +84,6 @@ struct OrbitEngine: Sendable {
                             earthFixedPosition: fixed, latitude: geographic.latitude,
                             longitude: geographic.longitude, altitudeKilometers: geographic.altitude)
     }
-
-    /// Each point uses Earth's rotation at that point's time. This is an open
-    /// Earth-fixed trajectory, not an artificially closed inertial ellipse.
-    func nextOrbit(from date: Date, samples: Int = 180) throws -> [SIMD3<Float>] {
-        precondition(samples > 1)
-        return try (0...samples).map {
-            try state(at: date.addingTimeInterval(Double($0) / Double(samples) * elements.periodSeconds)).scenePosition
-        }
-    }
 }
 
 enum EarthCoordinates {
@@ -86,6 +105,12 @@ enum EarthCoordinates {
     static func earthFixed(_ p: SIMD3<Double>, at date: Date) -> SIMD3<Double> {
         let angle = siderealAngle(at: date)
         return [cos(angle) * p.x + sin(angle) * p.y, -sin(angle) * p.x + cos(angle) * p.y, p.z]
+    }
+
+    static func scenePosition(_ p: SIMD3<Double>) -> SIMD3<Float> {
+        // ECEF: X = Greenwich, Y = 90°E, Z = north.
+        // RealityKit: +X east at Greenwich, +Y north, +Z Greenwich.
+        SIMD3(Float(p.y), Float(p.z), Float(p.x)) / Float(equatorialRadius)
     }
 
     static func geodetic(_ p: SIMD3<Double>) -> (latitude: Double, longitude: Double, altitude: Double) {

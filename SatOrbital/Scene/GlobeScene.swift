@@ -5,7 +5,7 @@ import UIKit
 @MainActor
 final class GlobeScene: NSObject {
     private var frame: TrackingFrame?
-    private var lastPathDate: Date?
+    private var lastPath: [SIMD3<Float>]?
     private var hasFocused = false
     private var onFailure: ((String) -> Void)?
     var lastResetID = 0
@@ -76,17 +76,21 @@ final class GlobeScene: NSObject {
     func setFrame(_ frame: TrackingFrame?) {
         self.frame = frame
         satellite.isEnabled = frame != nil
-        guard let frame else { return }
-        if lastPathDate != frame.pathDate {
+        guard let frame else {
+            for child in Array(orbitEntity.children) { child.removeFromParent() }
+            lastPath = nil
+            return
+        }
+        if lastPath != frame.path {
             do {
                 let material = UnlitMaterial(color: UIColor(red: 0.32, green: 0.77, blue: 0.69, alpha: 1))
                 let model = ModelEntity(mesh: try SceneGeometry.orbitTube(points: frame.path), materials: [material])
                 for child in Array(orbitEntity.children) { child.removeFromParent() }
                 orbitEntity.addChild(model)
-                lastPathDate = frame.pathDate
+                lastPath = frame.path
             } catch {
                 for child in Array(orbitEntity.children) { child.removeFromParent() }
-                DispatchQueue.main.async { [weak self] in self?.onFailure?("The predicted path could not be drawn.") }
+                DispatchQueue.main.async { [weak self] in self?.onFailure?("The orbit line could not be drawn.") }
             }
         }
         updateBodies()
@@ -166,7 +170,7 @@ final class GlobeScene: NSObject {
         let position = frame.position(at: Date())
         satellite.position = position
         satellite.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: normalize(position))
-        // Earth and all trajectory points share the Earth-fixed frame.
+        // Earth, the marker, and the instantaneous orbit share the Earth-fixed frame.
         // Do not apply the demo's extra Earth rotation here.
     }
 

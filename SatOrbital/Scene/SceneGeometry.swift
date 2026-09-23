@@ -38,14 +38,19 @@ enum SceneGeometry {
     }
 
     static func orbitTube(points: [SIMD3<Float>]) throws -> MeshResource {
-        precondition(points.count > 1)
+        precondition(points.count >= 5 && points.first == points.last)
         let sides = 6
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
         var indices: [UInt32] = []
         for index in points.indices {
             let center = points[index]
-            let tangent = normalize(points[min(index + 1, points.count - 1)] - points[max(index - 1, 0)])
+            // Wrap neighbors across the duplicated closing point so the tube's
+            // first and last cross sections meet with identical normals.
+            let count = points.count - 1
+            let previous = (index + count - 1) % count
+            let next = (index + 1) % count
+            let tangent = normalize(points[next] - points[previous])
             let radial = normalize(center)
             let crossAxis = normalize(cross(tangent, radial))
             let outward = normalize(cross(crossAxis, tangent))
@@ -63,7 +68,7 @@ enum SceneGeometry {
                 }
             }
         }
-        var descriptor = MeshDescriptor(name: "ISS predicted Earth-fixed path")
+        var descriptor = MeshDescriptor(name: "ISS current orbital ellipse")
         descriptor.positions = .init(positions)
         descriptor.normals = .init(normals)
         descriptor.primitives = .triangles(indices)

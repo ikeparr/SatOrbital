@@ -13,9 +13,6 @@ final class TrackingStore: ObservableObject {
     @Published private(set) var now = Date()
 
     private var frozenDate: Date?
-    private var path: [SIMD3<Float>] = []
-    private var pathDate = Date.distantPast
-    private var pathElements: OrbitalElements?
     private let repository: OrbitRepository
     private var generation = 0
 
@@ -70,9 +67,6 @@ final class TrackingStore: ObservableObject {
         guard freshness != .expired else { frame = nil; predictionError = OrbitError.expired.localizedDescription; return }
         let date = frozenDate ?? now
         let elements = cached.elements
-        let rebuild = elements != pathElements || abs(date.timeIntervalSince(pathDate)) >= 60 || path.isEmpty
-        let existingPath = path
-        let existingPathDate = pathDate
         let live = isLive
         generation += 1
         let currentGeneration = generation
@@ -82,15 +76,12 @@ final class TrackingStore: ObservableObject {
                 let engine = try OrbitEngine(elements: elements)
                 let state = try engine.state(at: date)
                 let next = live ? try engine.state(at: date.addingTimeInterval(1)).scenePosition : state.scenePosition
-                let points = rebuild ? try engine.nextOrbit(from: date) : existingPath
+                let points = try state.orbitRing()
                 return TrackingFrame(state: state, nextPosition: next, interpolates: live,
-                                     path: points, pathDate: rebuild ? date : existingPathDate)
+                                     path: points, pathDate: date)
             }.value
             guard !Task.isCancelled, currentGeneration == generation else { return }
             frame = nextFrame
-            path = nextFrame.path
-            pathDate = nextFrame.pathDate
-            pathElements = elements
             predictionError = nil
         } catch {
             guard !Task.isCancelled, currentGeneration == generation else { return }
