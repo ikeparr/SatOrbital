@@ -9,6 +9,7 @@ Positions are calculated predictions, not live telemetry, and can differ from th
 This is a personal project, there are currently have no plans to actually TestFlight the app
 
 App screenshots:
-<img width="1206" height="2622" alt="Simulator Screenshot - iPhone 17 Pro - 2026-09-23 at 22 14 30" src="https://github.com/user-attachments/assets/0c17d948-70ba-487c-b627-1b43b287865b" />
 
-<img width="1206" height="2622" alt="Simulator Screenshot - iPhone 17 Pro - 2026-09-23 at 22 14 53" src="https://github.com/user-attachments/assets/e0f431ef-971a-4fe4-8436-4482ca424707" />
+<img width="301" height="655" alt="Simulator Screenshot - iPhone 17 Pro - 2026-09-23 at 22 14 30" src="https://github.com/user-attachments/assets/0c17d948-70ba-487c-b627-1b43b287865b" />
+
+<img width="301" height="655" alt="Simulator Screenshot - iPhone 17 Pro - 2026-09-23 at 22 14 53" src="https://github.com/user-attachments/assets/e0f431ef-971a-4fe4-8436-4482ca424707" />
