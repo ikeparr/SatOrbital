@@ -68,7 +68,7 @@ enum SceneGeometry {
                 }
             }
         }
-        var descriptor = MeshDescriptor(name: "ISS current orbital ellipse")
+        var descriptor = MeshDescriptor(name: "Current satellite orbital ellipse")
         descriptor.positions = .init(positions)
         descriptor.normals = .init(normals)
         descriptor.primitives = .triangles(indices)

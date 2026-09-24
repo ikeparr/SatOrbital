@@ -64,9 +64,13 @@ struct OrbitalElements: Codable, Equatable, Sendable {
     }
 
     static func decodeISS(_ data: Data) throws -> OrbitalElements {
+        try decode(data, catalogID: 25544)
+    }
+
+    static func decode(_ data: Data, catalogID: Int) throws -> OrbitalElements {
         guard data.count <= 65_536 else { throw OrbitError.invalidResponse }
         let records = try JSONDecoder().decode([OrbitalElements].self, from: data)
-        guard let record = records.filter({ $0.catalogID == 25544 })
+        guard let record = records.filter({ $0.catalogID == catalogID })
             .max(by: { ($0.epoch ?? .distantPast) < ($1.epoch ?? .distantPast) }) else {
             throw OrbitError.invalidElements
         }
@@ -83,5 +87,27 @@ enum UTCDate {
         if let date = formatter.date(from: value) { return date }
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: value)
+    }
+}
+
+/// A small curated catalog; IDs identify each object's public CelesTrak record.
+enum SatelliteTarget: Int, CaseIterable, Identifiable, Sendable {
+    case iss = 25544, tiangong = 48274, hubble = 20580, noaa20 = 43013
+    var id: Int { rawValue }
+    var name: String {
+        switch self {
+        case .iss: "ISS"
+        case .tiangong: "Tiangong"
+        case .hubble: "Hubble"
+        case .noaa20: "NOAA-20"
+        }
+    }
+    var subtitle: String {
+        switch self {
+        case .iss: "International Space Station"
+        case .tiangong: "China’s space station"
+        case .hubble: "Hubble Space Telescope"
+        case .noaa20: "Weather and Earth observation"
+        }
     }
 }

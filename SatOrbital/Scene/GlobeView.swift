@@ -2,7 +2,8 @@ import RealityKit
 import SwiftUI
 
 struct GlobeView: UIViewRepresentable {
-    let frame: TrackingFrame?
+    let frames: [SatelliteTarget: TrackingFrame]
+    let selected: SatelliteTarget?
     let isActive: Bool
     let showsOrbit: Bool
     let resetID: Int
@@ -27,16 +28,17 @@ struct GlobeView: UIViewRepresentable {
         view.isUserInteractionEnabled = false
         surface.isMultipleTouchEnabled = true
         surface.addSubview(view)
-        surface.accessibilityLabel = "Interactive Earth and the International Space Station"
+        surface.accessibilityLabel = "Interactive Earth and the selected satellite"
         surface.accessibilityHint = "Drag to rotate. Pinch to zoom. View controls also provide accessible buttons."
         context.coordinator.install(in: view, interactionView: surface, onFailure: onFailure)
         return surface
     }
 
     func updateUIView(_ view: UIView, context: Context) {
+        view.accessibilityLabel = selected == nil ? "Interactive Earth and all satellites" : "Interactive Earth and the selected satellite"
         let scene = context.coordinator
-        scene.setFrame(frame)
-        scene.orbitEntity.isEnabled = showsOrbit && frame != nil
+        scene.setFrames(frames, selected: selected)
+        scene.orbitEntity.isEnabled = showsOrbit && !frames.isEmpty
         scene.setActive(isActive)
         if scene.lastResetID != resetID {
             scene.lastResetID = resetID

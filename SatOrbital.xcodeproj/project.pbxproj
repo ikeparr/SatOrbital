@@ -28,7 +28,7 @@ F9737812D22080A2B2DE2BDC = { isa = PBXBuildFile; fileRef = 88FBBE2FC9612753E3998
 2A3ECF2A7F53D7D96E0D1F90 = { isa = PBXBuildFile; fileRef = 469D60F055982286C2A12022; };
 91BF5D7CCBF51BC7E686B3EC = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "SatOrbital/Resources/Assets.xcassets"; sourceTree = "<group>"; };
 A3938ED12F4BDA1B0ABD518D = { isa = PBXBuildFile; fileRef = 91BF5D7CCBF51BC7E686B3EC; };
-3530FFB48918060FD29547A9 = { isa = PBXFileReference; lastKnownFileType = text.json; path = "SatOrbital/Resources/ISSSeed.json"; sourceTree = "<group>"; };
+3530FFB48918060FD29547A9 = { isa = PBXFileReference; lastKnownFileType = text.json; path = "SatOrbital/Resources/SatelliteSeeds.json"; sourceTree = "<group>"; };
 53B4DE189A984EC0AEC760CD = { isa = PBXBuildFile; fileRef = 3530FFB48918060FD29547A9; };
 4F4858724786639E1FB23250 = { isa = PBXFileReference; lastKnownFileType = text; path = "SatOrbital/Resources/ThirdPartyNotices.txt"; sourceTree = "<group>"; };
 B50BB2B6A479660C256214B9 = { isa = PBXBuildFile; fileRef = 4F4858724786639E1FB23250; };

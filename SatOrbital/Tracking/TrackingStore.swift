@@ -3,8 +3,14 @@ import Foundation
 
 @MainActor
 final class TrackingStore: ObservableObject {
-    @Published private(set) var frame: TrackingFrame?
-    @Published private(set) var cached: CachedOrbit?
+    @Published private(set) var selected: SatelliteTarget? = .iss
+    @Published private(set) var frames: [SatelliteTarget: TrackingFrame] = [:]
+    @Published private(set) var results: [SatelliteTarget: OrbitLoadResult] = [:]
+    var frame: TrackingFrame? { selected.flatMap { frames[$0] } }
+    var cached: CachedOrbit? { selected.flatMap { results[$0]?.cached } }
+    var targets: [SatelliteTarget] { selected.map { [$0] } ?? SatelliteTarget.allCases }
+    var selectionName: String { selected?.name ?? "All" }
+    var selectionSubtitle: String { selected?.subtitle ?? "All satellites · Earth overview" }
     @Published private(set) var notice: String?
     @Published private(set) var predictionError: String?
     @Published private(set) var isRefreshing = false
@@ -13,23 +19,50 @@ final class TrackingStore: ObservableObject {
     @Published private(set) var now = Date()
 
     private var frozenDate: Date?
-    private let repository: OrbitRepository
+    private let repositories: [SatelliteTarget: OrbitRepository]
     private var generation = 0
 
     init() {
         let directory = URL.applicationSupportDirectory.appending(path: "SatOrbital", directoryHint: .isDirectory)
-        let seedURL = Bundle.main.url(forResource: "ISSSeed", withExtension: "json")
-        let seed = seedURL.flatMap { try? Data(contentsOf: $0) }
-        repository = OrbitRepository(cacheURL: directory.appending(path: "iss-orbit.json"), seed: seed)
+        let seedURL = Bundle.main.url(forResource: "SatelliteSeeds", withExtension: "json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let seeds = seedURL.flatMap { try? Data(contentsOf: $0) }
+            .flatMap { try? decoder.decode([CachedOrbit].self, from: $0) } ?? []
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        repositories = Dictionary(uniqueKeysWithValues: SatelliteTarget.allCases.map { target in
+            let seed = seeds.first { $0.elements.catalogID == target.id }.flatMap { try? encoder.encode($0) }
+            // Preserve existing ISS installations' cache and request deadline.
+            let filename = target == .iss ? "iss-orbit.json" : "orbit-\(target.id).json"
+            return (target, OrbitRepository(cacheURL: directory.appending(path: filename),
+                                            catalogID: target.id, seed: seed))
+        })
+    }
+
+    func select(_ target: SatelliteTarget?) async {
+        guard target != selected, !isRefreshing else { return }
+        generation += 1 // Invalidate any numerical work from the previous selection.
+        selected = target
+        frames = [:]
+        results = [:]
+        predictionError = nil
+        notice = nil
+        nextRequestAt = .distantPast
+        await refresh()
     }
 
     var freshness: OrbitFreshness? {
-        cached?.elements.epoch.map { OrbitFreshness.assess(epoch: $0, at: now) }
+        let values = targets.compactMap { results[$0]?.cached?.elements.epoch }
+            .map { OrbitFreshness.assess(epoch: $0, at: now) }
+        if values.contains(.expired) { return .expired }
+        if values.contains(.stale) { return .stale }
+        return values.isEmpty ? nil : .fresh
     }
     var canRefresh: Bool { !isRefreshing && now >= nextRequestAt }
     var modeLabel: String {
-        if cached == nil { return isRefreshing ? "LOADING ISS ORBIT" : "ORBIT UNAVAILABLE" }
-        if freshness == .expired { return "UPDATE REQUIRED" }
+        if results.values.allSatisfy({ $0.cached == nil }) { return isRefreshing ? "LOADING ORBIT" : "ORBIT UNAVAILABLE" }
+        if freshness == .expired && frames.isEmpty { return "UPDATE REQUIRED" }
         if predictionError != nil { return "POSITION UNAVAILABLE" }
         if !isLive { return "PAUSED · PREDICTED" }
         if freshness == .stale { return "NOW · STALE ELEMENTS" }
@@ -39,17 +72,17 @@ final class TrackingStore: ObservableObject {
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        let available = await repository.current()
-        cached = available.cached
-        nextRequestAt = available.nextRequestAt
-        notice = available.notice
+        for target in targets {
+            results[target] = await repositories[target]!.current()
+        }
         await tick()
-        let result = await repository.load()
-        cached = result.cached
-        nextRequestAt = result.nextRequestAt
-        notice = result.notice
+        for target in targets {
+            results[target] = await repositories[target]!.load()
+            await tick()
+        }
+        nextRequestAt = results.values.map(\.nextRequestAt).min() ?? .distantPast
+        notice = results.values.compactMap(\.notice).first
         isRefreshing = false
-        await tick()
     }
 
     func run() async {
@@ -63,31 +96,19 @@ final class TrackingStore: ObservableObject {
 
     func tick() async {
         now = Date()
-        guard let cached else { frame = nil; return }
-        guard freshness != .expired else { frame = nil; predictionError = OrbitError.expired.localizedDescription; return }
         let date = frozenDate ?? now
-        let elements = cached.elements
+        let freshnessDate = now
+        let cached = results.compactMapValues(\.cached)
         let live = isLive
         generation += 1
         let currentGeneration = generation
-        do {
-            // Numerical work and orbit sampling stay off the UI thread.
-            let nextFrame = try await Task.detached(priority: .userInitiated) {
-                let engine = try OrbitEngine(elements: elements)
-                let state = try engine.state(at: date)
-                let next = live ? try engine.state(at: date.addingTimeInterval(1)).scenePosition : state.scenePosition
-                let points = try state.orbitRing()
-                return TrackingFrame(state: state, nextPosition: next, interpolates: live,
-                                     path: points, pathDate: date)
-            }.value
-            guard !Task.isCancelled, currentGeneration == generation else { return }
-            frame = nextFrame
-            predictionError = nil
-        } catch {
-            guard !Task.isCancelled, currentGeneration == generation else { return }
-            frame = nil
-            predictionError = error.localizedDescription
-        }
+        let snapshot = await Task.detached(priority: .userInitiated) {
+            TrackingFrame.snapshot(cached, at: date, freshnessDate: freshnessDate, live: live)
+        }.value
+        guard !Task.isCancelled, currentGeneration == generation else { return }
+        frames = snapshot
+        predictionError = snapshot.count < targets.count && !isRefreshing
+            ? "Some positions are unavailable. Refresh orbital data when available." : nil
     }
 
     func togglePlayback() async {

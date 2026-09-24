@@ -160,4 +160,30 @@ final class OrbitEngineTests: XCTestCase {
         XCTAssertEqual(state.scenePosition.y, Float(state.earthFixedPosition.z / EarthCoordinates.equatorialRadius), accuracy: 1e-6)
         XCTAssertEqual(state.scenePosition.z, Float(state.earthFixedPosition.x / EarthCoordinates.equatorialRadius), accuracy: 1e-6)
     }
+    func testAllSatellitesShareTimeAndPauseTogether() throws {
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let seeds = try decoder.decode([CachedOrbit].self, from: fixture("satellite-seeds"))
+        var cached = Dictionary(uniqueKeysWithValues: seeds.map { (SatelliteTarget(rawValue: $0.elements.catalogID)!, $0) })
+        let date = try XCTUnwrap(UTCDate.parse("2026-09-23T16:00:00Z"))
+        let live = TrackingFrame.snapshot(cached, at: date, freshnessDate: date, live: true)
+        XCTAssertEqual(live.count, 4)
+        for frame in live.values {
+            XCTAssertEqual(frame.state.date, date)
+            XCTAssertEqual(frame.path.first, frame.state.scenePosition)
+            XCTAssertEqual(frame.path.first, frame.path.last)
+            XCTAssertNotEqual(frame.position(at: date), frame.position(at: date.addingTimeInterval(1)))
+        }
+        let paused = TrackingFrame.snapshot(cached, at: date, freshnessDate: date, live: false)
+        for frame in paused.values {
+            XCTAssertEqual(frame.position(at: date), frame.position(at: date.addingTimeInterval(100)))
+        }
+        cached[.iss] = cached[.hubble] // One unusable target must not hide the other three.
+        let partial = TrackingFrame.snapshot(cached, at: date, freshnessDate: date, live: true)
+        XCTAssertEqual(partial.count, 3)
+        XCTAssertNil(partial[.iss])
+        XCTAssertTrue(TrackingFrame.snapshot(cached, at: date, freshnessDate: date.addingTimeInterval(8 * 86400), live: true).isEmpty)
+        let single = TrackingFrame.snapshot([.hubble: try XCTUnwrap(cached[.hubble])], at: date, freshnessDate: date, live: true)
+        XCTAssertEqual(Set(single.keys), [.hubble])
+    }
+
 }

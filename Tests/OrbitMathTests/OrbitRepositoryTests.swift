@@ -4,8 +4,9 @@ import XCTest
 private actor StubClient: OrbitHTTPClient {
     var response: OrbitHTTPResponse
     private(set) var calls = 0
+    private(set) var requestedIDs: [Int] = []
     init(_ response: OrbitHTTPResponse) { self.response = response }
-    func fetchISS() async throws -> OrbitHTTPResponse { calls += 1; return response }
+    func fetchOrbit(catalogID: Int) async throws -> OrbitHTTPResponse { calls += 1; requestedIDs.append(catalogID); return response }
     func set(_ response: OrbitHTTPResponse) { self.response = response }
 }
 
@@ -122,4 +123,36 @@ final class OrbitRepositoryTests: XCTestCase {
         XCTAssertEqual(older.cached?.fetchedAt, original.cached?.fetchedAt)
         XCTAssertNotNil(older.notice)
     }
+    func testEachCatalogTargetLoadsItsOwnDataAndClosedOrbit() async throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "satellite-seeds", withExtension: "json", subdirectory: "Fixtures"))
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let seeds = try decoder.decode([CachedOrbit].self, from: Data(contentsOf: url))
+        XCTAssertEqual(Set(seeds.map { $0.elements.catalogID }), Set(SatelliteTarget.allCases.map(\.id)))
+        for target in SatelliteTarget.allCases {
+            let seed = try XCTUnwrap(seeds.first { $0.elements.catalogID == target.id })
+            let (_, _, cacheURL) = try fixture()
+            let now = try XCTUnwrap(seed.elements.epoch).addingTimeInterval(300)
+            let client = StubClient(.init(data: try JSONEncoder().encode([seed.elements]), status: 200))
+            let repository = OrbitRepository(cacheURL: cacheURL, catalogID: target.id, client: client)
+            let loaded = await repository.load(at: now)
+            XCTAssertEqual(loaded.cached?.elements.catalogID, target.id)
+            XCTAssertNil(loaded.notice)
+            let requested = await client.requestedIDs
+            XCTAssertEqual(requested, [target.id])
+            let state = try OrbitEngine(elements: XCTUnwrap(loaded.cached?.elements)).state(at: now)
+            XCTAssertTrue((250...1000).contains(state.altitudeKilometers))
+            let ring = try state.orbitRing()
+            XCTAssertEqual(ring.first, state.scenePosition)
+            XCTAssertEqual(ring.last, ring.first)
+            // A fresh repository with another catalog ID must reject this disk cache.
+            let otherID = target == .iss ? SatelliteTarget.hubble.id : SatelliteTarget.iss.id
+            let other = OrbitRepository(cacheURL: cacheURL, catalogID: otherID, client: client)
+            let mismatched = await other.current(at: now)
+            XCTAssertNil(mismatched.cached)
+            let rejectedDownload = await other.load(at: now)
+            XCTAssertNil(rejectedDownload.cached)
+            XCTAssertNotNil(rejectedDownload.notice)
+        }
+    }
+
 }

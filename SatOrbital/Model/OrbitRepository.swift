@@ -29,15 +29,15 @@ struct OrbitHTTPResponse: Sendable {
 }
 
 protocol OrbitHTTPClient: Sendable {
-    func fetchISS() async throws -> OrbitHTTPResponse
+    func fetchOrbit(catalogID: Int) async throws -> OrbitHTTPResponse
 }
 
 struct CelesTrakClient: OrbitHTTPClient {
-    func fetchISS() async throws -> OrbitHTTPResponse {
-        let url = URL(string: "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=JSON")!
+    func fetchOrbit(catalogID: Int) async throws -> OrbitHTTPResponse {
+        let url = URL(string: "https://celestrak.org/NORAD/elements/gp.php?CATNR=\(catalogID)&FORMAT=JSON")!
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("SatOrbital/0.2 (iOS; ISS orbital viewer)", forHTTPHeaderField: "User-Agent")
+        request.setValue("SatOrbital/0.2 (iOS; satellite orbital viewer)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw OrbitError.invalidResponse }
         return OrbitHTTPResponse(data: data, status: response.statusCode,
@@ -45,7 +45,7 @@ struct CelesTrakClient: OrbitHTTPClient {
     }
 }
 
-/// A single ISS query, at most once per two hours after success. A durable retry
+/// A single satellite query, at most once per two hours after success. A durable retry
 /// deadline also prevents repeated requests across launches after provider failures.
 actor OrbitRepository {
     static let updateInterval: TimeInterval = 7_200
@@ -56,6 +56,7 @@ actor OrbitRepository {
         var cached: CachedOrbit?
         var nextRequestAt: Date
     }
+    private let catalogID: Int
     private let cacheURL: URL
     private let seed: Data?
     private let client: any OrbitHTTPClient
@@ -63,7 +64,8 @@ actor OrbitRepository {
     private var fetching = false
     private var notice: String?
 
-    init(cacheURL: URL, seed: Data? = nil, client: any OrbitHTTPClient = CelesTrakClient()) {
+    init(cacheURL: URL, catalogID: Int = 25544, seed: Data? = nil, client: any OrbitHTTPClient = CelesTrakClient()) {
+        self.catalogID = catalogID
         self.cacheURL = cacheURL
         self.seed = seed
         self.client = client
@@ -85,14 +87,14 @@ actor OrbitRepository {
         envelope?.nextRequestAt = now.addingTimeInterval(Self.failureInterval)
         persist()
         do {
-            let response = try await client.fetchISS()
+            let response = try await client.fetchOrbit(catalogID: catalogID)
             guard response.status == 200 else {
                 let providerLimit = [403, 429].contains(response.status) ? Self.updateInterval : Self.failureInterval
                 let retry = Self.retryDelay(response.retryAfter, now: now)
                 envelope?.nextRequestAt = now.addingTimeInterval(max(providerLimit, retry))
                 throw OrbitError.http(response.status)
             }
-            let elements = try OrbitalElements.decodeISS(response.data)
+            let elements = try OrbitalElements.decode(response.data, catalogID: catalogID)
             guard let epoch = elements.epoch, epoch <= now.addingTimeInterval(86_400),
                   OrbitFreshness.assess(epoch: epoch, at: now) != .expired else { throw OrbitError.invalidElements }
             _ = try OrbitEngine(elements: elements).state(at: now)
@@ -129,7 +131,7 @@ actor OrbitRepository {
     }
 
     private func valid(_ cached: CachedOrbit, at now: Date) -> Bool {
-        guard cached.elements.catalogID == 25544,
+        guard cached.elements.catalogID == catalogID,
               cached.fetchedAt.timeIntervalSince1970.isFinite,
               cached.fetchedAt <= now.addingTimeInterval(300),
               let epoch = cached.elements.epoch, epoch <= now.addingTimeInterval(86_400) else { return false }

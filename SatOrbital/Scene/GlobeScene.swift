@@ -4,8 +4,11 @@ import UIKit
 
 @MainActor
 final class GlobeScene: NSObject {
-    private var frame: TrackingFrame?
-    private var lastPath: [SIMD3<Float>]?
+    private var frames: [SatelliteTarget: TrackingFrame] = [:]
+    private var selected: SatelliteTarget?
+    private var lastPaths: [SatelliteTarget: [SIMD3<Float>]] = [:]
+    private var satellites: [SatelliteTarget: Entity] = [:]
+    private var orbitModels: [SatelliteTarget: Entity] = [:]
     private var hasFocused = false
     private var onFailure: ((String) -> Void)?
     var lastResetID = 0
@@ -15,7 +18,6 @@ final class GlobeScene: NSObject {
     private weak var view: ARView?
     private let root = AnchorEntity(world: .zero)
     private let earth = Entity()
-    private let satellite = Entity()
     private let camera = PerspectiveCamera()
     private var subscription: Cancellable?
     private var yaw: Float = 0.25
@@ -33,7 +35,6 @@ final class GlobeScene: NSObject {
         root.addChild(camera)
         root.addChild(earth)
         root.addChild(orbitEntity)
-        root.addChild(satellite)
 
         do {
             try buildEarth()
@@ -44,7 +45,12 @@ final class GlobeScene: NSObject {
             ]))
             DispatchQueue.main.async { onFailure("The Earth texture could not load. Showing a simplified globe.") }
         }
-        buildSatellite()
+        for target in SatelliteTarget.allCases {
+            let satellite = Entity()
+            buildSatellite(satellite)
+            root.addChild(satellite)
+            satellites[target] = satellite
+        }
         buildLights()
         buildStars()
         updateCamera()
@@ -73,31 +79,42 @@ final class GlobeScene: NSObject {
         earth.addChild(ModelEntity(mesh: try SceneGeometry.globe(), materials: [material]))
     }
 
-    func setFrame(_ frame: TrackingFrame?) {
-        self.frame = frame
-        satellite.isEnabled = frame != nil
-        guard let frame else {
-            for child in Array(orbitEntity.children) { child.removeFromParent() }
-            lastPath = nil
-            return
+    func setFrames(_ frames: [SatelliteTarget: TrackingFrame], selected: SatelliteTarget?) {
+        if self.selected != selected {
+            self.selected = selected
+            hasFocused = false
         }
-        if lastPath != frame.path {
-            do {
-                let material = UnlitMaterial(color: UIColor(red: 0.32, green: 0.77, blue: 0.69, alpha: 1))
-                let model = ModelEntity(mesh: try SceneGeometry.orbitTube(points: frame.path), materials: [material])
-                for child in Array(orbitEntity.children) { child.removeFromParent() }
-                orbitEntity.addChild(model)
-                lastPath = frame.path
-            } catch {
-                for child in Array(orbitEntity.children) { child.removeFromParent() }
-                DispatchQueue.main.async { [weak self] in self?.onFailure?("The orbit line could not be drawn.") }
+        self.frames = frames
+        for target in SatelliteTarget.allCases {
+            satellites[target]?.isEnabled = frames[target] != nil
+            guard let frame = frames[target] else {
+                orbitModels.removeValue(forKey: target)?.removeFromParent()
+                lastPaths[target] = nil
+                continue
+            }
+            if lastPaths[target] != frame.path {
+                do {
+                    let material = UnlitMaterial(color: UIColor(red: 0.32, green: 0.77, blue: 0.69, alpha: 1))
+                    let model = ModelEntity(mesh: try SceneGeometry.orbitTube(points: frame.path), materials: [material])
+                    orbitModels[target]?.removeFromParent()
+                    orbitEntity.addChild(model)
+                    orbitModels[target] = model
+                    lastPaths[target] = frame.path
+                } catch {
+                    orbitModels.removeValue(forKey: target)?.removeFromParent()
+                    lastPaths[target] = nil
+                    DispatchQueue.main.async { [weak self] in self?.onFailure?("An orbit line could not be drawn.") }
+                }
             }
         }
         updateBodies()
-        if !hasFocused { hasFocused = true; focusSatellite() }
+        if !hasFocused, selected == nil || selected.flatMap({ frames[$0] }) != nil {
+            hasFocused = true
+            focusSatellite()
+        }
     }
 
-    private func buildSatellite() {
+    private func buildSatellite(_ satellite: Entity) {
         let white = UnlitMaterial(color: UIColor(red: 0.96, green: 0.98, blue: 1, alpha: 1))
         let panel = UnlitMaterial(color: UIColor(red: 0.23, green: 0.63, blue: 0.80, alpha: 1))
         let body = ModelEntity(mesh: .generateBox(size: [0.018, 0.025, 0.034], cornerRadius: 0.003), materials: [white])
@@ -166,16 +183,17 @@ final class GlobeScene: NSObject {
     }
 
     private func updateBodies() {
-        guard let frame else { satellite.isEnabled = false; return }
-        let position = frame.position(at: Date())
-        satellite.position = position
-        satellite.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: normalize(position))
-        // Earth, the marker, and the instantaneous orbit share the Earth-fixed frame.
-        // Do not apply the demo's extra Earth rotation here.
+        let date = Date()
+        for (target, satellite) in satellites {
+            guard let frame = frames[target] else { satellite.isEnabled = false; continue }
+            let position = frame.position(at: date)
+            satellite.position = position
+            satellite.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: normalize(position))
+        }
     }
 
     private func focusSatellite() {
-        guard let frame else { resetView(); return }
+        guard let selected, let frame = frames[selected] else { resetView(); return }
         let direction = normalize(frame.position(at: Date()))
         yaw = atan2(direction.x, direction.z)
         pitch = min(max(asin(direction.y), -1.35), 1.35)
@@ -211,7 +229,7 @@ final class GlobeScene: NSObject {
     @objc private func resetView() {
         yaw = 0.25
         pitch = 0.28
-        distance = 3.65
+        distance = selected == nil ? 4.6 : 3.65
         updateCamera()
     }
 

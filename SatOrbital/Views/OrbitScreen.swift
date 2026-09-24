@@ -58,7 +58,7 @@ struct OrbitScreen: View {
                         .foregroundStyle(.white.opacity(0.65))
                         .frame(width: 44, height: 44)
                 }
-                .accessibilityLabel("About ISS tracking")
+                .accessibilityLabel("About satellite tracking")
             }
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -80,7 +80,8 @@ struct OrbitScreen: View {
 
     private var globe: some View {
         GlobeView(
-            frame: tracking.frame,
+            frames: tracking.frames,
+            selected: tracking.selected,
             isActive: scenePhase == .active,
             showsOrbit: showsOrbit,
             resetID: resetID,
@@ -88,10 +89,10 @@ struct OrbitScreen: View {
             onFailure: { renderingError = $0 }
         )
         .overlay {
-            if tracking.frame == nil {
+            if tracking.frames.isEmpty {
                 VStack(spacing: 10) {
                     if tracking.isRefreshing { ProgressView().tint(accent) }
-                    Text(tracking.isRefreshing ? "Loading ISS orbit…" : "ISS position unavailable")
+                    Text(tracking.isRefreshing ? "Loading orbit…" : "Position unavailable")
                         .font(.subheadline.weight(.medium))
                     Text(tracking.freshness == .expired ? "Update orbital data to resume tracking." : "The Earth view is still available.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -156,13 +157,37 @@ struct OrbitScreen: View {
                         .foregroundStyle(accent)
                         .frame(width: 46, height: 46)
                         .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("ISS")
-                            .font(.system(size: 20, weight: .semibold, design: .rounded))
-                        Text("International Space Station · 25544")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.5))
+                    Menu {
+                        Button {
+                            Task { await tracking.select(nil) }
+                        } label: {
+                            Label("All", systemImage: tracking.selected == nil ? "checkmark" : "globe")
+                        }
+                        ForEach(SatelliteTarget.allCases) { target in
+                            Button {
+                                Task { await tracking.select(target) }
+                            } label: {
+                                Label(target.name, systemImage: target == tracking.selected ? "checkmark" : "circle")
+                            }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 7) {
+                                Text(tracking.selectionName)
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                            }
+                            Text(tracking.selectionSubtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .lineLimit(2)
+                        }
+                        .frame(minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(tracking.isRefreshing)
+                    .accessibilityLabel("Choose satellite, currently \(tracking.selectionName)")
                     Spacer(minLength: 0)
                     Text("SGP4")
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -172,22 +197,33 @@ struct OrbitScreen: View {
                         .overlay(Capsule().strokeBorder(accent.opacity(0.25)))
                 }
                 Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
-                HStack(spacing: 0) {
-                    metric("ALTITUDE", value: formatted(tracking.frame?.state.altitudeKilometers, decimals: 1), unit: "km")
-                    Spacer(minLength: 6)
-                    metric("SPEED", value: formatted(tracking.frame?.state.speedKilometersPerSecond, decimals: 2), unit: "km/s")
-                    Spacer(minLength: 6)
-                    metric("ORBIT", value: formatted(tracking.cached.map { $0.elements.periodSeconds / 60 }, decimals: 1), unit: "min")
-                }
-                if let state = tracking.frame?.state {
-                    HStack {
-                        Text(String(format: "%.2f°%@  %.2f°%@", abs(state.latitude), state.latitude >= 0 ? "N" : "S", abs(state.longitude), state.longitude >= 0 ? "E" : "W"))
-                        Spacer(minLength: 4)
-                        Text(utcTime(state.date) + " UTC")
+                if tracking.selected == nil {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("\(tracking.frames.count) of \(SatelliteTarget.allCases.count) satellites tracked")
+                            .font(.subheadline.weight(.medium))
+                        Text("ISS · Tiangong · Hubble · NOAA-20")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Earth overview · Drag to explore")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .monospacedDigit()
+                } else {
+                    HStack(spacing: 0) {
+                        metric("ALTITUDE", value: formatted(tracking.frame?.state.altitudeKilometers, decimals: 1), unit: "km")
+                        Spacer(minLength: 6)
+                        metric("SPEED", value: formatted(tracking.frame?.state.speedKilometersPerSecond, decimals: 2), unit: "km/s")
+                        Spacer(minLength: 6)
+                        metric("ORBIT", value: formatted(tracking.cached.map { $0.elements.periodSeconds / 60 }, decimals: 1), unit: "min")
+                    }
+                    if let state = tracking.frame?.state {
+                        HStack {
+                            Text(String(format: "%.2f°%@  %.2f°%@", abs(state.latitude), state.latitude >= 0 ? "N" : "S", abs(state.longitude), state.longitude >= 0 ? "E" : "W"))
+                            Spacer(minLength: 4)
+                            Text(utcTime(state.date) + " UTC")
+                        }
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .monospacedDigit()
+                    }
                 }
             }
             .padding(compact ? 16 : 20)
@@ -203,7 +239,7 @@ struct OrbitScreen: View {
                         .background(accent, in: RoundedRectangle(cornerRadius: 14))
                 }
                 .accessibilityIdentifier("playPause")
-                .disabled(tracking.frame == nil)
+                .disabled(tracking.frames.isEmpty)
                 Button {
                     Task { await tracking.returnToNow(); resetID += 1 }
                 } label: {
@@ -212,8 +248,8 @@ struct OrbitScreen: View {
                         .frame(width: 56, height: 46)
                         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                 }
-                .accessibilityLabel("Return to current time and center ISS")
-                .disabled(tracking.frame == nil)
+                .accessibilityLabel(tracking.selected == nil ? "Return to current time and center Earth" : "Return to current time and center satellite")
+                .disabled(tracking.frames.isEmpty)
                 Button { showsOrbit.toggle() } label: {
                     Image(systemName: "circle.dashed")
                         .font(.system(size: 19))
@@ -228,7 +264,7 @@ struct OrbitScreen: View {
                         .frame(width: 46, height: 46)
                         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                 }
-                .accessibilityLabel("Center the view on the ISS")
+                .accessibilityLabel(tracking.selected == nil ? "Center the view on Earth" : "Center the view on the satellite")
             }
             .buttonStyle(.plain)
             HStack(spacing: 8) {
@@ -297,7 +333,7 @@ struct OrbitScreen: View {
         NavigationStack {
             List {
                 Section("Current orbital data") {
-                    LabeledContent("Satellite", value: "ISS · NORAD 25544")
+                    LabeledContent("Satellite", value: tracking.selected.map { "\($0.name) · NORAD \($0.id)" } ?? "All satellites")
                     if let cached = tracking.cached, let epoch = cached.elements.epoch {
                         LabeledContent("Element epoch", value: utcDate(epoch))
                         LabeledContent("Downloaded", value: utcDate(cached.fetchedAt))
@@ -314,9 +350,9 @@ struct OrbitScreen: View {
                     Text("Elements older than 48 hours are marked stale. Beyond seven days, positions are hidden until usable data is available. These are conservative app limits, not accuracy guarantees.")
                 }
                 Section("Exploring the orbit") {
-                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the ISS. The satellite marker is enlarged for visibility.")
+                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Tap its name on the card to choose another. The satellite marker is enlarged for visibility.")
                     Text("Pause holds the displayed time. Resume and NOW return to the actual current time, including after the app has been in the background.")
-                    Text("The green loop shows the ISS’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
+                    Text("The green loop shows the selected satellite’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
                 }
                 Section("How positions are calculated") {
                     Text("SGP4 predicts positions from public mean orbital elements. These are calculated positions, not live telemetry. Maneuvers and aging data can reduce accuracy. Earth lighting is illustrative; visibility footprints are not included yet.")
@@ -329,7 +365,7 @@ struct OrbitScreen: View {
                     Link("About the imagery", destination: URL(string: "https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/base-map/")!)
                 }
             }
-            .navigationTitle("About ISS tracking")
+            .navigationTitle("About satellite tracking")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { showsAbout = false } }
