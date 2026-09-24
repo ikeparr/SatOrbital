@@ -8,6 +8,10 @@ struct GlobeView: UIViewRepresentable {
     let showsOrbit: Bool
     let resetID: Int
     let cameraCommand: CameraCommand
+    let isFollowing: Bool
+    let reduceMotion: Bool
+    let onSelect: (SatelliteTarget) -> Void
+    let onManualControl: () -> Void
     let onFailure: (String) -> Void
 
     struct CameraCommand: Equatable {
@@ -29,7 +33,7 @@ struct GlobeView: UIViewRepresentable {
         surface.isMultipleTouchEnabled = true
         surface.addSubview(view)
         surface.accessibilityLabel = "Interactive Earth and the selected satellite"
-        surface.accessibilityHint = "Drag to rotate. Pinch to zoom. View controls also provide accessible buttons."
+        surface.accessibilityHint = "Tap a visible satellite to select it. Drag to rotate. Pinch to zoom. The satellite menu provides accessible selection."
         context.coordinator.install(in: view, interactionView: surface, onFailure: onFailure)
         return surface
     }
@@ -37,6 +41,9 @@ struct GlobeView: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) {
         view.accessibilityLabel = selected == nil ? "Interactive Earth and all satellites" : "Interactive Earth and the selected satellite"
         let scene = context.coordinator
+        scene.onSelect = onSelect
+        scene.onManualControl = onManualControl
+        scene.setInteraction(following: isFollowing, reducedMotion: reduceMotion)
         scene.setFrames(frames, selected: selected)
         scene.orbitEntity.isEnabled = showsOrbit && !frames.isEmpty
         scene.setActive(isActive)
@@ -46,7 +53,7 @@ struct GlobeView: UIViewRepresentable {
         }
         if scene.lastCameraCommandID != cameraCommand.id {
             scene.lastCameraCommandID = cameraCommand.id
-            scene.adjustCamera(yaw: cameraCommand.yaw, pitch: cameraCommand.pitch, zoom: cameraCommand.zoom)
+            scene.adjustCamera(yaw: cameraCommand.yaw, pitch: cameraCommand.pitch, zoom: cameraCommand.zoom, notifyManualInteraction: false)
         }
     }
 

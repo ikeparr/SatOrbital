@@ -8,6 +8,8 @@ struct OrbitScreen: View {
     @State private var resetID = 0
     @State private var cameraCommand = GlobeView.CameraCommand()
     @State private var showsAbout = false
+    @State private var detailsTarget: SatelliteTarget?
+    @State private var isFollowing = false
     @State private var renderingError: String?
 
     private let accent = Color(red: 0.48, green: 0.87, blue: 0.77)
@@ -30,13 +32,21 @@ struct OrbitScreen: View {
         .foregroundStyle(.white)
         .tint(accent)
         .sheet(isPresented: $showsAbout) { about }
+        .sheet(item: $detailsTarget) { target in
+            SatelliteDetailsView(tracking: tracking, target: target, isFollowing: $isFollowing,
+                                 returnToAll: { choose(nil) })
+        }
+        .onChange(of: tracking.selected) { _, _ in isFollowing = false }
+        .onChange(of: tracking.frames.isEmpty) { _, empty in
+            if empty { isFollowing = false }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             if reduceMotion { await tracking.pauseForReducedMotion() }
             await tracking.run()
         }
         .onChange(of: reduceMotion) { _, enabled in
-            if enabled { Task { await tracking.pauseForReducedMotion() } }
+            if enabled { isFollowing = false; Task { await tracking.pauseForReducedMotion() } }
         }
     }
 
@@ -86,6 +96,10 @@ struct OrbitScreen: View {
             showsOrbit: showsOrbit,
             resetID: resetID,
             cameraCommand: cameraCommand,
+            isFollowing: isFollowing,
+            reduceMotion: reduceMotion,
+            onSelect: { choose($0, showDetails: true) },
+            onManualControl: { isFollowing = false },
             onFailure: { renderingError = $0 }
         )
         .overlay {
@@ -115,7 +129,7 @@ struct OrbitScreen: View {
             .allowsHitTesting(false)
         }
         .overlay(alignment: .bottom) {
-            Text("DRAG TO ROTATE   ·   PINCH TO ZOOM")
+            Text(isFollowing ? "FOLLOWING \(tracking.selectionName.uppercased())" : "TAP A SATELLITE   ·   DRAG TO ROTATE")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .tracking(1.3)
                 .foregroundStyle(.white.opacity(0.40))
@@ -159,13 +173,13 @@ struct OrbitScreen: View {
                         .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
                     Menu {
                         Button {
-                            Task { await tracking.select(nil) }
+                            choose(nil)
                         } label: {
                             Label("All", systemImage: tracking.selected == nil ? "checkmark" : "globe")
                         }
                         ForEach(SatelliteTarget.allCases) { target in
                             Button {
-                                Task { await tracking.select(target) }
+                                choose(target, showDetails: true)
                             } label: {
                                 Label(target.name, systemImage: target == tracking.selected ? "checkmark" : "circle")
                             }
@@ -186,7 +200,6 @@ struct OrbitScreen: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(tracking.isRefreshing)
                     .accessibilityLabel("Choose satellite, currently \(tracking.selectionName)")
                     Spacer(minLength: 0)
                     Text("SGP4")
@@ -203,7 +216,7 @@ struct OrbitScreen: View {
                             .font(.subheadline.weight(.medium))
                         Text("ISS · Tiangong · Hubble · NOAA-20")
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("Earth overview · Drag to explore")
+                        Text("Tap a satellite to explore its orbit")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else {
@@ -229,6 +242,23 @@ struct OrbitScreen: View {
             .padding(compact ? 16 : 20)
             .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.075)))
+
+            if let selected = tracking.selected {
+                HStack(spacing: 12) {
+                    Button("All", systemImage: "globe") { choose(nil) }
+                    Spacer(minLength: 0)
+                    Button { isFollowing.toggle() } label: {
+                        Label(isFollowing ? "Following" : "Follow", systemImage: isFollowing ? "location.fill" : "location")
+                    }
+                    .disabled(tracking.frame == nil || reduceMotion)
+                    .accessibilityHint("Keeps the satellite centered. Dragging or pinching stops following.")
+                    Spacer(minLength: 0)
+                    Button("Details", systemImage: "info.circle") { detailsTarget = selected }
+                }
+                .font(.caption.weight(.medium))
+                .buttonStyle(.plain)
+                .frame(minHeight: 44)
+            }
 
             HStack(spacing: 10) {
                 Button { Task { await tracking.togglePlayback() } } label: {
@@ -289,6 +319,13 @@ struct OrbitScreen: View {
         .padding(.horizontal, 24)
     }
 
+    private func choose(_ target: SatelliteTarget?, showDetails: Bool = false) {
+        isFollowing = false
+        if target == tracking.selected { resetID += 1 }
+        if showDetails { detailsTarget = target } else { detailsTarget = nil }
+        Task { await tracking.select(target) }
+    }
+
     private func metric(_ title: String, value: String, unit: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title)
@@ -305,6 +342,7 @@ struct OrbitScreen: View {
     }
 
     private func moveCamera(yaw: Float = 0, pitch: Float = 0, zoom: Float = 1) {
+        isFollowing = false
         cameraCommand = .init(id: cameraCommand.id + 1, yaw: yaw, pitch: pitch, zoom: zoom)
     }
 
@@ -350,9 +388,9 @@ struct OrbitScreen: View {
                     Text("Elements older than 48 hours are marked stale. Beyond seven days, positions are hidden until usable data is available. These are conservative app limits, not accuracy guarantees.")
                 }
                 Section("Exploring the orbit") {
-                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Tap its name on the card to choose another. The satellite marker is enlarged for visibility.")
+                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Tap its name on the card to choose another. Tap a visible satellite to select it and open its details. Follow keeps it centered; dragging or pinching stops following. All returns to the Earth overview. Satellite markers are enlarged for visibility.")
                     Text("Pause holds the displayed time. Resume and NOW return to the actual current time, including after the app has been in the background.")
-                    Text("The green loop shows the selected satellite’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
+                    Text("The highlighted loop shows the selected satellite’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
                 }
                 Section("How positions are calculated") {
                     Text("SGP4 predicts positions from public mean orbital elements. These are calculated positions, not live telemetry. Maneuvers and aging data can reduce accuracy. Earth lighting is illustrative; visibility footprints are not included yet.")

@@ -20,9 +20,14 @@ final class GlobeScene: NSObject {
     private let earth = Entity()
     private let camera = PerspectiveCamera()
     private var subscription: Cancellable?
-    private var yaw: Float = 0.25
-    private var pitch: Float = 0.28
-    private var distance: Float = 3.65
+    private var pose = GlobeCameraPose.overview
+    private var flightOrigin: GlobeCameraPose?
+    private var flightTarget = GlobeCameraPose.overview
+    private var flightElapsed: TimeInterval = 0
+    private var followsSatellite = false
+    private var reducedMotion = false
+    var onSelect: ((SatelliteTarget) -> Void)?
+    var onManualControl: (() -> Void)?
     private var isActive = true
 
     func install(in view: ARView, interactionView: UIView, onFailure: @escaping (String) -> Void) {
@@ -63,6 +68,11 @@ final class GlobeScene: NSObject {
         interactionView.addGestureRecognizer(pan)
         interactionView.addGestureRecognizer(pinch)
         interactionView.addGestureRecognizer(doubleTap)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapSatellite(_:)))
+        tap.require(toFail: doubleTap)
+        tap.require(toFail: pan)
+        tap.require(toFail: pinch)
+        interactionView.addGestureRecognizer(tap)
         subscribe()
     }
 
@@ -80,21 +90,23 @@ final class GlobeScene: NSObject {
     }
 
     func setFrames(_ frames: [SatelliteTarget: TrackingFrame], selected: SatelliteTarget?) {
-        if self.selected != selected {
+        let selectionChanged = self.selected != selected
+        if selectionChanged {
             self.selected = selected
             hasFocused = false
         }
         self.frames = frames
         for target in SatelliteTarget.allCases {
             satellites[target]?.isEnabled = frames[target] != nil
+            satellites[target]?.scale = SIMD3(repeating: selected == target ? 1.2 : 1)
             guard let frame = frames[target] else {
                 orbitModels.removeValue(forKey: target)?.removeFromParent()
                 lastPaths[target] = nil
                 continue
             }
-            if lastPaths[target] != frame.path {
+            if selectionChanged || lastPaths[target] != frame.path {
                 do {
-                    let material = UnlitMaterial(color: UIColor(red: 0.32, green: 0.77, blue: 0.69, alpha: 1))
+                    let material = UnlitMaterial(color: selected == target ? UIColor(red: 1, green: 0.72, blue: 0.38, alpha: 1) : UIColor(red: 0.32, green: 0.77, blue: 0.69, alpha: 1))
                     let model = ModelEntity(mesh: try SceneGeometry.orbitTube(points: frame.path), materials: [material])
                     orbitModels[target]?.removeFromParent()
                     orbitEntity.addChild(model)
@@ -166,6 +178,7 @@ final class GlobeScene: NSObject {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.updateBodies()
+                self.advanceCamera(by: event.deltaTime)
             }
         }
     }
@@ -192,13 +205,65 @@ final class GlobeScene: NSObject {
         }
     }
 
+    func setInteraction(following: Bool, reducedMotion: Bool) {
+        let beganFollowing = following && !followsSatellite
+        followsSatellite = following && !reducedMotion
+        self.reducedMotion = reducedMotion
+        if reducedMotion, flightOrigin != nil {
+            pose = flightTarget
+            flightOrigin = nil
+            updateCamera()
+        }
+        if beganFollowing && followsSatellite { focusSatellite() }
+    }
+
+    private func startFlight(to target: GlobeCameraPose) {
+        flightTarget = target
+        flightElapsed = 0
+        if reducedMotion {
+            pose = target
+            flightOrigin = nil
+            updateCamera()
+        } else { flightOrigin = pose }
+    }
+
+    private func advanceCamera(by seconds: TimeInterval) {
+        if let origin = flightOrigin {
+            if let selected, let frame = frames[selected] {
+                flightTarget = .focused(on: frame.position(at: Date()), distance: flightTarget.distance)
+            }
+            flightElapsed += min(max(seconds, 0), 0.1)
+            pose = origin.interpolated(to: flightTarget, fraction: Float(flightElapsed / 0.85))
+            if flightElapsed >= 0.85 { flightOrigin = nil }
+            updateCamera()
+        } else if followsSatellite, let selected, let frame = frames[selected] {
+            pose = .focused(on: frame.position(at: Date()), distance: pose.distance)
+            updateCamera()
+        }
+    }
+
     private func focusSatellite() {
-        guard let selected, let frame = frames[selected] else { resetView(); return }
-        let direction = normalize(frame.position(at: Date()))
-        yaw = atan2(direction.x, direction.z)
-        pitch = min(max(asin(direction.y), -1.35), 1.35)
-        distance = 3.65
-        updateCamera()
+        guard let selected, let frame = frames[selected] else {
+            startFlight(to: .overview)
+            return
+        }
+        startFlight(to: .focused(on: frame.position(at: Date())))
+    }
+
+    @objc private func tapSatellite(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, let view else { return }
+        let location = gesture.location(in: view)
+        let candidates = SatelliteTarget.allCases.compactMap { target -> SatellitePickCandidate? in
+            guard let satellite = satellites[target], satellite.isEnabled,
+                  GlobePicking.isVisible(position: satellite.position, camera: pose.position),
+                  simd_dot(satellite.position - pose.position, -pose.position) > 0,
+                  let point = view.project(satellite.position), view.bounds.contains(point) else { return nil }
+            return SatellitePickCandidate(target: target, point: SIMD2(Float(point.x), Float(point.y)),
+                                          cameraDistance: simd_distance(satellite.position, pose.position))
+        }
+        if let target = GlobePicking.nearest(to: SIMD2(Float(location.x), Float(location.y)), candidates: candidates) {
+            onSelect?(target)
+        }
     }
 
     @objc private func pan(_ gesture: UIPanGestureRecognizer) {
@@ -212,25 +277,22 @@ final class GlobeScene: NSObject {
         gesture.scale = 1
     }
 
-    func adjustCamera(yaw deltaYaw: Float = 0, pitch deltaPitch: Float = 0, zoom: Float = 1) {
-        yaw += deltaYaw
-        pitch = min(max(pitch + deltaPitch, -1.35), 1.35)
-        distance = min(max(distance * zoom, 1.65), 6.0)
+    func adjustCamera(yaw deltaYaw: Float = 0, pitch deltaPitch: Float = 0, zoom: Float = 1, notifyManualInteraction: Bool = true) {
+        flightOrigin = nil
+        followsSatellite = false
+        if notifyManualInteraction { onManualControl?() }
+        pose.yaw += deltaYaw
+        pose.pitch = min(max(pose.pitch + deltaPitch, -1.55), 1.55)
+        pose.distance = min(max(pose.distance * zoom, 1.65), 6.0)
         updateCamera()
     }
 
     private func updateCamera() {
-        let position = SIMD3<Float>(
-            sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)
-        ) * distance
-        camera.look(at: .zero, from: position, relativeTo: nil)
+        camera.look(at: .zero, from: pose.position, relativeTo: nil)
     }
 
     @objc private func resetView() {
-        yaw = 0.25
-        pitch = 0.28
-        distance = selected == nil ? 4.6 : 3.65
-        updateCamera()
+        focusSatellite()
     }
 
     func reset() {

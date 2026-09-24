@@ -8,7 +8,7 @@ let package = Package(
     products: [.library(name: "OrbitMath", targets: ["OrbitMath"])],
     targets: [
         .target(name: "CSGP4", path: "Vendor/CSGP4", exclude: ["LICENSE"], publicHeadersPath: "include"),
-        .target(name: "OrbitMath", dependencies: ["CSGP4"], path: "SatOrbital/Model"),
+        .target(name: "OrbitMath", dependencies: ["CSGP4"], path: "SatOrbital", exclude: ["Resources", "Scene", "Views", "SatOrbitalApp.swift"]),
         .testTarget(name: "OrbitMathTests", dependencies: ["OrbitMath"], path: "Tests/OrbitMathTests", resources: [.copy("Fixtures")])
     ]
 )
