@@ -29,3 +29,17 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <http://unlicense.org>
+
+
+Satellite reference images (bundled for offline display)
+ISS: NASA, archival photograph S119-E-010399 (2009).
+https://www.nasa.gov/feature/iss-virtual-tour/
+Hubble: NASA, photograph.
+https://science.nasa.gov/mission/hubble/observatory/
+NOAA-20 / JPSS-1: NASA, spacecraft illustration, public domain.
+https://commons.wikimedia.org/wiki/File:NOAA-20_JPSS-1_spacecraft_model_1.png
+Tiangong rear view (2023): China Manned Space Engineering Office.
+https://commons.wikimedia.org/wiki/File:Rear_view_of_Tiangong_Space_Station.jpg
+Licensed under Creative Commons Attribution 4.0 International:
+https://creativecommons.org/licenses/by/4.0/
+Images converted to PNG where needed; no visual changes. Reference imagery does not represent a live camera view.

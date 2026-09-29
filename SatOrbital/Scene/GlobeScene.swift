@@ -9,7 +9,8 @@ final class GlobeScene: NSObject {
     private var lastPaths: [SatelliteTarget: [SIMD3<Float>]] = [:]
     private var satellites: [SatelliteTarget: Entity] = [:]
     private var orbitModels: [SatelliteTarget: Entity] = [:]
-    private var hasFocused = false
+    // Initial data loading must preserve the unselected overview camera.
+    private var hasFocused = true
     private var onFailure: ((String) -> Void)?
     var lastResetID = 0
     var lastCameraCommandID = 0

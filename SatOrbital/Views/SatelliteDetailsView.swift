@@ -15,6 +15,23 @@ struct SatelliteDetailsView: View {
         NavigationStack {
             List {
                 Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Image(target.referenceImage.assetName)
+                            .resizable().scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 190)
+                            .background(.black, in: RoundedRectangle(cornerRadius: 12))
+                            .accessibilityLabel("Reference image of \(target.name)")
+                        Text(target.referenceImage.caption).font(.caption)
+                        Link("Image: " + target.referenceImage.credit, destination: target.referenceImage.sourceURL)
+                            .font(.caption2)
+                        if let license = target.referenceImage.license, let url = URL(string: license) {
+                            Link("CC BY 4.0 · image license", destination: url).font(.caption2)
+                        }
+                        Text("Reference imagery, not a live view.").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                Section {
                     Text(target.subtitle).font(.headline)
                     LabeledContent("NORAD catalog ID", value: String(target.id))
                     if let cached { LabeledContent("Catalog name", value: cached.elements.name) }
@@ -72,6 +89,7 @@ struct SatelliteDetailsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .tint(Color(red: 0.48, green: 0.87, blue: 0.77))
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }

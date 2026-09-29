@@ -8,6 +8,9 @@ struct OrbitScreen: View {
     @State private var resetID = 0
     @State private var cameraCommand = GlobeView.CameraCommand()
     @State private var showsAbout = false
+    @State private var showsSearch = false
+    @State private var pendingSearchTarget: SatelliteTarget?
+    @State private var didChooseSearch = false
     @State private var detailsTarget: SatelliteTarget?
     @State private var isFollowing = false
     @State private var renderingError: String?
@@ -32,6 +35,17 @@ struct OrbitScreen: View {
         .foregroundStyle(.white)
         .tint(accent)
         .sheet(isPresented: $showsAbout) { about }
+        .sheet(isPresented: $showsSearch, onDismiss: {
+            guard didChooseSearch else { return }
+            didChooseSearch = false
+            choose(pendingSearchTarget, showDetails: pendingSearchTarget != nil)
+        }) {
+            SatelliteSearchView(selected: tracking.selected) { target in
+                pendingSearchTarget = target
+                didChooseSearch = true
+                showsSearch = false
+            }
+        }
         .sheet(item: $detailsTarget) { target in
             SatelliteDetailsView(tracking: tracking, target: target, isFollowing: $isFollowing,
                                  returnToAll: { choose(nil) })
@@ -62,6 +76,12 @@ struct OrbitScreen: View {
                         .tracking(2.5)
                 }
                 Spacer()
+                Button { showsSearch = true } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 20, weight: .light))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Search satellites")
                 Button { showsAbout = true } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 20, weight: .light))
@@ -171,20 +191,7 @@ struct OrbitScreen: View {
                         .foregroundStyle(accent)
                         .frame(width: 46, height: 46)
                         .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
-                    Menu {
-                        Button {
-                            choose(nil)
-                        } label: {
-                            Label("All", systemImage: tracking.selected == nil ? "checkmark" : "globe")
-                        }
-                        ForEach(SatelliteTarget.allCases) { target in
-                            Button {
-                                choose(target, showDetails: true)
-                            } label: {
-                                Label(target.name, systemImage: target == tracking.selected ? "checkmark" : "circle")
-                            }
-                        }
-                    } label: {
+                    Button { showsSearch = true                    } label: {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 7) {
                                 Text(tracking.selectionName)
@@ -388,7 +395,7 @@ struct OrbitScreen: View {
                     Text("Elements older than 48 hours are marked stale. Beyond seven days, positions are hidden until usable data is available. These are conservative app limits, not accuracy guarantees.")
                 }
                 Section("Exploring the orbit") {
-                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Tap its name on the card to choose another. Tap a visible satellite to select it and open its details. Follow keeps it centered; dragging or pinching stops following. All returns to the Earth overview. Satellite markers are enlarged for visibility.")
+                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Use Search or tap its name on the card to find another by name, alias, or NORAD ID. Tap a visible satellite to select it and open its details. Follow keeps it centered; dragging or pinching stops following. All returns to the Earth overview. Satellite markers are enlarged for visibility.")
                     Text("Pause holds the displayed time. Resume and NOW return to the actual current time, including after the app has been in the background.")
                     Text("The highlighted loop shows the selected satellite’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
                 }
