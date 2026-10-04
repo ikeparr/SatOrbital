@@ -4,7 +4,12 @@ struct SatelliteSearchView: View {
     let selected: SatelliteTarget?
     let onSelect: (SatelliteTarget?) -> Void
     @State private var query = ""
+    @State private var starlinkOnly = false
     @Environment(\.dismiss) private var dismiss
+
+    private var matches: [SatelliteTarget] {
+        SatelliteTarget.matching(query).filter { !starlinkOnly || $0.isStarlink }
+    }
 
     var body: some View {
         NavigationStack {
@@ -15,15 +20,24 @@ struct SatelliteSearchView: View {
                             .foregroundStyle(.primary)
                     }
                 }
+                Section {
+                    Toggle("Starlink only", isOn: $starlinkOnly)
+                }
                 Section("Included satellites") {
-                    ForEach(SatelliteTarget.matching(query)) { target in
+                    ForEach(matches) { target in
                         Button { onSelect(target) } label: {
                             HStack(spacing: 12) {
-                                Image(target.referenceImage.assetName)
+                                Group {
+                                if let reference = target.referenceImage {
+                                Image(reference.assetName)
                                     .resizable().scaledToFit()
                                     .frame(width: 64, height: 52)
                                     .background(.black, in: RoundedRectangle(cornerRadius: 8))
                                     .accessibilityHidden(true)
+                                } else {
+                                    SatelliteModelIllustration(kind: target.kind).frame(width: 64, height: 52).accessibilityHidden(true)
+                                }
+                                }
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(target.name).font(.headline)
                                     Text(target.subtitle).font(.caption).foregroundStyle(.secondary)
@@ -36,13 +50,13 @@ struct SatelliteSearchView: View {
                         }
                         .accessibilityLabel("\(target.name), \(target.subtitle), NORAD \(String(target.id))")
                     }
-                    if SatelliteTarget.matching(query).isEmpty {
+                    if matches.isEmpty {
                         Text("No matching satellites. Try a name, NORAD ID, or alias such as HST or JPSS-1.")
                             .foregroundStyle(.secondary)
                     }
                 }
                 Section {
-                    Text("Search the four satellites currently included. Tap a result to focus the globe and see details.")
+                    Text("Search the \(SatelliteTarget.allCases.count) satellites currently included. Tap a result to focus the globe and see details.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

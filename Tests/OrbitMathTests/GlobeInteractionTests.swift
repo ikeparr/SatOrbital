@@ -53,3 +53,55 @@ final class GlobeInteractionTests: XCTestCase {
         }
     }
 }
+
+ extension GlobeInteractionTests {
+    func testFocusCameraStaysOutsideNavigationAndGeostationaryOrbits() {
+        for radius: Float in [1.07, 4.2, 6.6] {
+            let position = SIMD3<Float>(0, 0, radius)
+            let pose = GlobeCameraPose.focused(on: position)
+            XCTAssertGreaterThanOrEqual(pose.distance, radius + 1.45)
+            XCTAssertEqual(pose.yaw, 0, accuracy: 0.0001)
+            XCTAssertEqual(pose.pitch, 0, accuracy: 0.0001)
+        }
+        XCTAssertEqual(GlobeCameraPose.focused(on: SIMD3<Float>(0, 0, 1.07)).distance, 2.55, accuracy: 0.0001)
+    }
+}
+
+
+extension GlobeInteractionTests {
+    func testSpaceAndEarthFramesShareAlignedGeometryAndCorrectRotation() throws {
+        let reference = try XCTUnwrap(UTCDate.parse("2026-10-02T00:00:00Z"))
+        for seconds: Double in [0, 60, 3600, 43000, 86000, -86400] {
+            let date = reference.addingTimeInterval(seconds)
+            let p = SIMD3<Float>(0.4, 0.6, 0.8)
+            let delta = OrbitViewCoordinates.angle(at: date, reference: reference)
+            let inertial = OrbitViewCoordinates.rotate(p, by: delta)
+            let earthWorld = OrbitViewCoordinates.rotate(inertial, by: OrbitViewCoordinates.orbitAngle(mode: .earthFixed, at: date, reference: reference))
+            XCTAssertLessThan(simd_distance(earthWorld, p), 0.000001)
+            let spaceWorld = OrbitViewCoordinates.rotate(p, by: OrbitViewCoordinates.earthAngle(mode: .spaceFixed, at: date, reference: reference))
+            XCTAssertLessThan(simd_distance(spaceWorld, inertial), 0.000001)
+            XCTAssertEqual(OrbitViewCoordinates.earthAngle(mode: .earthFixed, at: date, reference: reference), 0)
+            XCTAssertEqual(OrbitViewCoordinates.orbitAngle(mode: .spaceFixed, at: date, reference: reference), 0)
+        }
+        let quarterDay = reference.addingTimeInterval(21541)
+        let greenwich = OrbitViewCoordinates.rotate(SIMD3<Float>(0, 0, 1), by: OrbitViewCoordinates.angle(at: quarterDay, reference: reference))
+        XCTAssertGreaterThan(greenwich.x, 0.99)
+        let before = OrbitViewCoordinates.rotate([0, 0, 1], by: OrbitViewCoordinates.angle(at: reference.addingTimeInterval(43080), reference: reference))
+        let after = OrbitViewCoordinates.rotate([0, 0, 1], by: OrbitViewCoordinates.angle(at: reference.addingTimeInterval(43082), reference: reference))
+        XCTAssertLessThan(simd_distance(before, after), 0.0002)
+    }
+
+    func testLEOAndHigherShellsPartitionCatalogAndProvideWiderCamera() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "large-catalog", withExtension: "json", subdirectory: "Fixtures"))
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let records = try decoder.decode([CachedOrbit].self, from: Data(contentsOf: url))
+        XCTAssertEqual(records.count, 396)
+        XCTAssertTrue(records.allSatisfy { OrbitShell.all.includes($0.elements) })
+        XCTAssertTrue(records.allSatisfy { OrbitShell.low.includes($0.elements) != OrbitShell.higher.includes($0.elements) })
+        XCTAssertTrue(OrbitShell.low.includes(try XCTUnwrap(records.first { $0.elements.catalogID == SatelliteTarget.iss.id }).elements))
+        let navigation = records.filter { SatelliteTarget(rawValue: $0.elements.catalogID)?.filterCategory == .navigation }
+        XCTAssertEqual(navigation.count, 36)
+        XCTAssertTrue(navigation.allSatisfy { OrbitShell.higher.includes($0.elements) })
+        XCTAssertGreaterThan(OrbitShell.higher.cameraDistance, OrbitShell.low.cameraDistance)
+    }
+}

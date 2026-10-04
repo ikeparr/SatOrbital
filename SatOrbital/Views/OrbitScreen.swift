@@ -4,10 +4,23 @@ struct OrbitScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var tracking = TrackingStore()
-    @State private var showsOrbit = true
+    @AppStorage("showsOrbit") private var showsOrbit = true
+    @AppStorage("showsFootprint") private var showsFootprint = true
+    @AppStorage("globeStyle") private var globeStyleID = GlobeStyle.natural.rawValue
+    private var globeStyle: GlobeStyle { GlobeStyle(rawValue: globeStyleID) ?? .natural }
+    @AppStorage("showsStarlinks") private var showsStarlinks = true
+    @AppStorage("hiddenSatelliteCategories") private var hiddenCategories = ""
+    @AppStorage("orbitViewMode") private var orbitViewModeID = OrbitViewMode.earthFixed.rawValue
+    @AppStorage("orbitShell") private var orbitShellID = OrbitShell.all.rawValue
+    private var orbitViewMode: OrbitViewMode { OrbitViewMode(rawValue: orbitViewModeID) ?? .earthFixed }
+    private var orbitShell: OrbitShell { OrbitShell(rawValue: orbitShellID) ?? .all }
+    @State private var showsTimeControls = false
+    @State private var timeAnchor = Date()
+    @State private var timeOffset: Double = 0
     @State private var resetID = 0
     @State private var cameraCommand = GlobeView.CameraCommand()
     @State private var showsAbout = false
+    @State private var showsSettings = false
     @State private var showsSearch = false
     @State private var pendingSearchTarget: SatelliteTarget?
     @State private var didChooseSearch = false
@@ -34,7 +47,9 @@ struct OrbitScreen: View {
         .background(background.ignoresSafeArea())
         .foregroundStyle(.white)
         .tint(accent)
+        .sheet(isPresented: $showsTimeControls) { timeControls }
         .sheet(isPresented: $showsAbout) { about }
+        .sheet(isPresented: $showsSettings) { settings }
         .sheet(isPresented: $showsSearch, onDismiss: {
             guard didChooseSearch else { return }
             didChooseSearch = false
@@ -48,7 +63,15 @@ struct OrbitScreen: View {
         }
         .sheet(item: $detailsTarget) { target in
             SatelliteDetailsView(tracking: tracking, target: target, isFollowing: $isFollowing,
-                                 returnToAll: { choose(nil) })
+                                 closeSelection: { choose(nil) })
+        }
+        .onChange(of: showsStarlinks) { _, _ in applyFilters() }
+        .onChange(of: hiddenCategories) { _, _ in applyFilters() }
+        .onChange(of: orbitShellID) { _, _ in
+            tracking.setOrbitShell(orbitShell)
+            detailsTarget = nil
+            isFollowing = false
+            Task { await tracking.reloadVisible() }
         }
         .onChange(of: tracking.selected) { _, _ in isFollowing = false }
         .onChange(of: tracking.frames.isEmpty) { _, empty in
@@ -56,6 +79,8 @@ struct OrbitScreen: View {
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
+            tracking.setVisibleCategories(enabledCategories)
+            tracking.setOrbitShell(orbitShell)
             if reduceMotion { await tracking.pauseForReducedMotion() }
             await tracking.run()
         }
@@ -74,14 +99,32 @@ struct OrbitScreen: View {
                     Text("SAT / ORBITAL")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .tracking(2.5)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 Spacer()
+                Button {
+                    timeAnchor = tracking.now
+                    timeOffset = min(max(tracking.displayDate.timeIntervalSince(timeAnchor), -86_400), 86_400)
+                    showsTimeControls = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 20, weight: .light))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Time controls")
                 Button { showsSearch = true } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 20, weight: .light))
                         .frame(width: 44, height: 44)
                 }
                 .accessibilityLabel("Search satellites")
+                Button { showsSettings = true } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 20, weight: .light))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Settings")
                 Button { showsAbout = true } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 20, weight: .light))
@@ -90,20 +133,7 @@ struct OrbitScreen: View {
                 }
                 .accessibilityLabel("About satellite tracking")
             }
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("A new perspective.")
-                        .font(.system(size: compact ? 25 : 32, weight: .medium, design: .rounded))
-                        .minimumScaleFactor(0.7)
-                        .lineLimit(1)
-                    if !compact {
-                        Text("Explore the world from above.")
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.48))
-                    }
-                }
-                Spacer(minLength: 4)
-            }
+
         }
         .padding(.horizontal, 24)
     }
@@ -114,6 +144,14 @@ struct OrbitScreen: View {
             selected: tracking.selected,
             isActive: scenePhase == .active,
             showsOrbit: showsOrbit,
+            showsFootprint: showsFootprint,
+            globeStyle: globeStyle,
+            displayDate: tracking.displayDate,
+            animationDate: tracking.now,
+            playbackRate: tracking.playbackRate,
+            isPlaying: tracking.isLive,
+            viewMode: orbitViewMode,
+            orbitShell: orbitShell,
             resetID: resetID,
             cameraCommand: cameraCommand,
             isFollowing: isFollowing,
@@ -126,9 +164,9 @@ struct OrbitScreen: View {
             if tracking.frames.isEmpty {
                 VStack(spacing: 10) {
                     if tracking.isRefreshing { ProgressView().tint(accent) }
-                    Text(tracking.isRefreshing ? "Loading orbit…" : "Position unavailable")
+                    Text(tracking.targets.isEmpty ? (enabledCategories.isEmpty ? "No categories selected" : "No satellites in this view") : tracking.isRefreshing ? "Loading orbit…" : "Position unavailable")
                         .font(.subheadline.weight(.medium))
-                    Text(tracking.freshness == .expired ? "Update orbital data to resume tracking." : "The Earth view is still available.")
+                    Text(tracking.targets.isEmpty ? "Choose another orbit shell or category in Settings." : tracking.freshness == .expired ? "Update orbital data to resume tracking." : "The Earth view is still available.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(20)
@@ -137,12 +175,28 @@ struct OrbitScreen: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            HStack(spacing: 7) {
-                Circle().fill(tracking.freshness == .stale ? .orange : tracking.isLive ? accent : .gray).frame(width: 5, height: 5)
-                Text(tracking.modeLabel)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .tracking(1.4)
-                    .foregroundStyle(.white.opacity(0.6))
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    Circle().fill(tracking.freshness == .stale ? .orange : tracking.isLive ? accent : .gray).frame(width: 5, height: 5)
+                    Text(tracking.modeLabel)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                if orbitViewMode != .earthFixed || orbitShell != .all {
+                    Text(tracking.selected == nil ? "\(orbitViewMode.name) · \(orbitShell.name)" : orbitViewMode.name)
+                        .font(.caption2).foregroundStyle(.white.opacity(0.55))
+                }
+                if !tracking.isCurrentTime {
+                    Text(tracking.displayDate.formatted(date: .abbreviated, time: .standard))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+                if showsFootprint, tracking.selected != nil, tracking.frame != nil {
+                    Label("Above-horizon footprint", systemImage: "circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color(red: 1, green: 0.72, blue: 0.38))
+                }
             }
             .padding(.leading, 26)
             .padding(.top, 22)
@@ -158,6 +212,10 @@ struct OrbitScreen: View {
         }
         .overlay(alignment: .bottomTrailing) {
             Menu {
+                Picker("Orbit shell", selection: $orbitShellID) {
+                    ForEach(OrbitShell.allCases) { shell in Text(shell.name).tag(shell.rawValue) }
+                }
+                Divider()
                 Button("Rotate left", systemImage: "arrow.left") { moveCamera(yaw: -0.3) }
                 Button("Rotate right", systemImage: "arrow.right") { moveCamera(yaw: 0.3) }
                 Button("Look from north", systemImage: "arrow.up") { moveCamera(pitch: 0.3) }
@@ -184,75 +242,16 @@ struct OrbitScreen: View {
                 Text("Elements are over 48 hours old. Position accuracy may be reduced.")
                     .font(.caption2).foregroundStyle(.orange)
             }
-            VStack(alignment: .leading, spacing: compact ? 12 : 20) {
-                HStack(alignment: .center, spacing: 13) {
-                    Image(systemName: "sparkle")
-                        .font(.system(size: 21))
-                        .foregroundStyle(accent)
-                        .frame(width: 46, height: 46)
-                        .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
-                    Button { showsSearch = true                    } label: {
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 7) {
-                                Text(tracking.selectionName)
-                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                            }
-                            Text(tracking.selectionSubtitle)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .lineLimit(2)
-                        }
-                        .frame(minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Choose satellite, currently \(tracking.selectionName)")
-                    Spacer(minLength: 0)
-                    Text("SGP4")
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .tracking(1)
-                        .foregroundStyle(accent)
-                        .padding(.horizontal, 9).padding(.vertical, 6)
-                        .overlay(Capsule().strokeBorder(accent.opacity(0.25)))
-                }
-                Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
-                if tracking.selected == nil {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(tracking.frames.count) of \(SatelliteTarget.allCases.count) satellites tracked")
-                            .font(.subheadline.weight(.medium))
-                        Text("ISS · Tiangong · Hubble · NOAA-20")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Tap a satellite to explore its orbit")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                } else {
-                    HStack(spacing: 0) {
-                        metric("ALTITUDE", value: formatted(tracking.frame?.state.altitudeKilometers, decimals: 1), unit: "km")
-                        Spacer(minLength: 6)
-                        metric("SPEED", value: formatted(tracking.frame?.state.speedKilometersPerSecond, decimals: 2), unit: "km/s")
-                        Spacer(minLength: 6)
-                        metric("ORBIT", value: formatted(tracking.cached.map { $0.elements.periodSeconds / 60 }, decimals: 1), unit: "min")
-                    }
-                    if let state = tracking.frame?.state {
-                        HStack {
-                            Text(String(format: "%.2f°%@  %.2f°%@", abs(state.latitude), state.latitude >= 0 ? "N" : "S", abs(state.longitude), state.longitude >= 0 ? "E" : "W"))
-                            Spacer(minLength: 4)
-                            Text(utcTime(state.date) + " UTC")
-                        }
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .monospacedDigit()
-                    }
-                }
-            }
-            .padding(compact ? 16 : 20)
-            .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.075)))
 
             if let selected = tracking.selected {
                 HStack(spacing: 12) {
-                    Button("All", systemImage: "globe") { choose(nil) }
+                    Button { choose(nil) } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("Close satellite selection")
+                    .accessibilityHint("Returns to your previous globe rotation and zoom.")
                     Spacer(minLength: 0)
                     Button { isFollowing.toggle() } label: {
                         Label(isFollowing ? "Following" : "Follow", systemImage: isFollowing ? "location.fill" : "location")
@@ -260,7 +259,7 @@ struct OrbitScreen: View {
                     .disabled(tracking.frame == nil || reduceMotion)
                     .accessibilityHint("Keeps the satellite centered. Dragging or pinching stops following.")
                     Spacer(minLength: 0)
-                    Button("Details", systemImage: "info.circle") { detailsTarget = selected }
+                    Button(selected.name, systemImage: "info.circle") { detailsTarget = selected }
                 }
                 .font(.caption.weight(.medium))
                 .buttonStyle(.plain)
@@ -320,7 +319,7 @@ struct OrbitScreen: View {
                 }
                 .disabled(!tracking.canRefresh)
                 .accessibilityLabel("Refresh orbital data")
-                .accessibilityHint("Available every two hours. See About for the next update time.")
+                .accessibilityHint("Available once every 24 hours. See About for the next update time.")
             }
         }
         .padding(.horizontal, 24)
@@ -328,42 +327,18 @@ struct OrbitScreen: View {
 
     private func choose(_ target: SatelliteTarget?, showDetails: Bool = false) {
         isFollowing = false
+        if let target {
+            setCategory(target.filterCategory, visible: true)
+            tracking.setVisibleCategories(enabledCategories)
+        }
         if target == tracking.selected { resetID += 1 }
         if showDetails { detailsTarget = target } else { detailsTarget = nil }
         Task { await tracking.select(target) }
     }
 
-    private func metric(_ title: String, value: String, unit: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title)
-                .font(.system(size: 8, weight: .medium, design: .monospaced))
-                .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.4))
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value).font(.system(size: 22, weight: .medium, design: .rounded))
-                Text(unit).font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(value) \(unit)")
-    }
-
     private func moveCamera(yaw: Float = 0, pitch: Float = 0, zoom: Float = 1) {
         isFollowing = false
         cameraCommand = .init(id: cameraCommand.id + 1, yaw: yaw, pitch: pitch, zoom: zoom)
-    }
-
-    private func formatted(_ value: Double?, decimals: Int) -> String {
-        guard let value else { return "—" }
-        return String(format: "%.*f", decimals, value)
-    }
-
-    private func utcTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
     }
 
     private func utcDate(_ date: Date) -> String {
@@ -372,6 +347,146 @@ struct OrbitScreen: View {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "MMM d, yyyy HH:mm 'UTC'"
         return formatter.string(from: date)
+    }
+
+    private var enabledCategories: Set<SatelliteCategory> {
+        let hidden = Set(hiddenCategories.split(separator: ",").compactMap { SatelliteCategory(rawValue: String($0)) })
+        var enabled = Set(SatelliteCategory.allCases).subtracting(hidden)
+        if !showsStarlinks { enabled.remove(.starlink) }
+        return enabled
+    }
+
+    private func setCategory(_ category: SatelliteCategory, visible: Bool) {
+        if category == .starlink { showsStarlinks = visible; return }
+        var hidden = Set(hiddenCategories.split(separator: ",").map(String.init))
+        if visible { hidden.remove(category.rawValue) } else { hidden.insert(category.rawValue) }
+        hiddenCategories = hidden.sorted().joined(separator: ",")
+    }
+
+    private func applyFilters() {
+        tracking.setVisibleCategories(enabledCategories)
+        if let target = detailsTarget, !enabledCategories.contains(target.filterCategory) { detailsTarget = nil }
+        Task { await tracking.reloadVisible() }
+    }
+
+    private var timeControls: some View {
+        NavigationStack {
+            Form {
+                Section("Displayed time") {
+                    Text(tracking.displayDate.formatted(date: .abbreviated, time: .standard))
+                        .font(.headline.monospacedDigit())
+                    Text("Times use your local time zone. Positions and daylight are predictions from the current orbital data.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Explore time") {
+                    Text(timeAnchor.addingTimeInterval(timeOffset).formatted(date: .abbreviated, time: .standard))
+                        .monospacedDigit()
+                    Slider(value: $timeOffset, in: -86_400...86_400, step: 60) { editing in
+                        if editing {
+                            if tracking.isLive { Task { await tracking.togglePlayback() } }
+                        } else { Task { await tracking.seek(to: timeAnchor.addingTimeInterval(timeOffset)) } }
+                    }
+                    .accessibilityLabel("Explore 24 hours before or after now")
+                    HStack {
+                        Text("−24 hours")
+                        Spacer()
+                        Text("+24 hours")
+                    }.font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Button("−15 min") { Task { await tracking.seek(to: tracking.displayDate.addingTimeInterval(-900)); syncTimeSlider() } }
+                        Spacer()
+                        Button("+15 min") { Task { await tracking.seek(to: tracking.displayDate.addingTimeInterval(900)); syncTimeSlider() } }
+                    }.buttonStyle(.borderless)
+                }
+                Section("Playback") {
+                    Picker("Speed", selection: Binding(
+                        get: { tracking.playbackRate },
+                        set: { rate in Task { await tracking.setPlaybackRate(rate) } }
+                    )) {
+                        Text("1×").tag(1.0)
+                        Text("10×").tag(10.0)
+                        Text("60×").tag(60.0)
+                    }.pickerStyle(.segmented)
+                    Button(tracking.isLive ? "Pause playback" : "Play from this time", systemImage: tracking.isLive ? "pause.fill" : "play.fill") {
+                        Task { await tracking.togglePlayback(); syncTimeSlider() }
+                    }.disabled(tracking.frames.isEmpty)
+                    Button("Return to now", systemImage: "clock") {
+                        Task { await tracking.returnToNow(); syncTimeSlider() }
+                    }
+                }
+            }
+            .navigationTitle("Time controls")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsTimeControls = false } } }
+        }
+        .tint(accent)
+        .presentationDetents([.large])
+    }
+
+    private func syncTimeSlider() {
+        timeAnchor = tracking.now
+        timeOffset = min(max(tracking.displayDate.timeIntervalSince(timeAnchor), -86_400), 86_400)
+    }
+
+    private var settings: some View {
+        NavigationStack {
+            Form {
+                Section("Orbit view") {
+                    Picker("View mode", selection: $orbitViewModeID) {
+                        ForEach(OrbitViewMode.allCases) { mode in Text(mode.name).tag(mode.rawValue) }
+                    }
+                    Text(orbitViewMode.description).font(.footnote).foregroundStyle(.secondary)
+                    Picker("Orbit shell", selection: $orbitShellID) {
+                        ForEach(OrbitShell.allCases) { shell in Text(shell.name).tag(shell.rawValue) }
+                    }.pickerStyle(.segmented)
+                    Text(orbitShell.description).font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Globe style") {
+                    Picker("Appearance", selection: $globeStyleID) {
+                        ForEach(GlobeStyle.allCases) { style in
+                            Text(style.name).tag(style.rawValue)
+                        }
+                    }
+                    Text(globeStyle.description).font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Globe display") {
+                    Toggle("Show orbit lines", isOn: $showsOrbit)
+                    Toggle("Show visibility footprint", isOn: $showsFootprint)
+                }
+                Section("Satellite categories") {
+                    ForEach(SatelliteCategory.allCases) { category in
+                        Toggle(category.name, isOn: Binding(
+                            get: { enabledCategories.contains(category) },
+                            set: { setCategory(category, visible: $0) }
+                        ))
+                    }
+                    Button("Show all categories") { hiddenCategories = ""; showsStarlinks = true }
+                    Text("Filters hide both markers and orbit lines. Search still includes every satellite; selecting one turns its category on.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Satellite models and orbits") {
+                    ForEach(SatelliteKind.allCases) { kind in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Label(kind.name, systemImage: kind.symbol)
+                            Text(kind.description).font(.caption).foregroundStyle(.secondary)
+                            Text("\(kind.orbitColorName) orbit line").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Models show the type of object and are enlarged for easy tapping.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Visibility footprints") {
+                    Text("Select a satellite to see its gold footprint on Earth. Inside the outline, that satellite is above the horizon for an observer at sea level.")
+                    Text("A visible pass also depends on darkness, satellite illumination, brightness, weather, and your local horizon.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsSettings = false } } }
+        }
+        .tint(accent)
+        .presentationDetents([.large])
     }
 
     private var about: some View {
@@ -391,16 +506,16 @@ struct OrbitScreen: View {
                     }
                     Button("Check for orbital update") { Task { await tracking.refresh() } }
                         .disabled(!tracking.canRefresh)
-                    Text("Updates are checked at most once every two hours after a successful download. Network or provider failures trigger a retry delay. Saved elements continue working offline.")
+                    Text("Orbital downloads are limited to once every 24 hours during development, including after a failed attempt. Refresh and app restarts respect the same limit. Saved elements continue working offline.")
                     Text("Elements older than 48 hours are marked stale. Beyond seven days, positions are hidden until usable data is available. These are conservative app limits, not accuracy guarantees.")
                 }
                 Section("Exploring the orbit") {
-                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Use Search or tap its name on the card to find another by name, alias, or NORAD ID. Tap a visible satellite to select it and open its details. Follow keeps it centered; dragging or pinching stops following. All returns to the Earth overview. Satellite markers are enlarged for visibility.")
+                    Text("Drag to rotate, pinch to zoom, or use View controls. The center button points the globe at the selected satellite, or centers Earth in All mode. Use Search to find a satellite by name, alias, or NORAD ID. Settings offers Earth-fixed and Space-fixed motion, plus All, LEO, and Higher orbit views. The orbit-shell control is also in View controls. Search can focus a satellite outside the current shell; closing returns to the previous view. Time controls lets you explore a day before or after now and play at 1×, 10×, or 60×. Resume plays from the displayed time; NOW restores real time. Settings contains category filters, orbit lines, and the selected satellite’s above-horizon footprint. Selecting a Starlink in search turns its visibility back on. Tap a visible satellite to select it and open its details. Follow keeps it centered; dragging or pinching stops following. Close satellite selection returns to your previous globe rotation and zoom. The center button in All mode restores the default Earth overview. Satellite markers are enlarged for visibility.")
                     Text("Pause holds the displayed time. Resume and NOW return to the actual current time, including after the app has been in the background.")
-                    Text("The highlighted loop shows the selected satellite’s current orbital ellipse and updates with its position. It illustrates the orbit’s shape, not its future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
+                    Text("The highlighted loop approximates the selected satellite’s orbital ellipse. Earth rotation animates smoothly; the shape refreshes occasionally to account for orbital changes. It illustrates orbital shape, not the future path over Earth. Speed is measured in the inertial TEME frame; altitude is above the WGS84 ellipsoid.")
                 }
                 Section("How positions are calculated") {
-                    Text("SGP4 predicts positions from public mean orbital elements. These are calculated positions, not live telemetry. Maneuvers and aging data can reduce accuracy. Earth lighting is illustrative; visibility footprints are not included yet.")
+                    Text("SGP4 predicts positions from public mean orbital elements. These are calculated positions, not live telemetry. Maneuvers and aging data can reduce accuracy. Natural and Blueprint shading approximates day and night at the displayed time; Atlas stays evenly lit. This does not predict satellite illumination or naked-eye visibility. The gold footprint marks where the selected satellite is above an ideal sea-level horizon. It does not account for terrain, atmospheric refraction, darkness, sunlight, or brightness; being above the horizon does not guarantee a visible object in the sky.")
                     Link("CelesTrak data and usage policy", destination: URL(string: "https://celestrak.org/usage-policy.php")!)
                     Text("SGP4: aholinch/sgp4, based on Vallado/CSSI, Unlicense. Library and fixture provenance are included with the project.")
                     Link("SGP4 source", destination: URL(string: "https://github.com/aholinch/sgp4")!)

@@ -4,7 +4,7 @@ struct SatelliteDetailsView: View {
     @ObservedObject var tracking: TrackingStore
     let target: SatelliteTarget
     @Binding var isFollowing: Bool
-    let returnToAll: () -> Void
+    let closeSelection: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -15,26 +15,43 @@ struct SatelliteDetailsView: View {
         NavigationStack {
             List {
                 Section {
+                    if let reference = target.referenceImage {
                     VStack(alignment: .leading, spacing: 8) {
-                        Image(target.referenceImage.assetName)
+                        Image(reference.assetName)
                             .resizable().scaledToFit()
                             .frame(maxWidth: .infinity)
                             .frame(height: 190)
                             .background(.black, in: RoundedRectangle(cornerRadius: 12))
                             .accessibilityLabel("Reference image of \(target.name)")
-                        Text(target.referenceImage.caption).font(.caption)
-                        Link("Image: " + target.referenceImage.credit, destination: target.referenceImage.sourceURL)
+                        Text(reference.caption).font(.caption)
+                        Link("Image: " + reference.credit, destination: reference.sourceURL)
                             .font(.caption2)
-                        if let license = target.referenceImage.license, let url = URL(string: license) {
+                        if let license = reference.license, let url = URL(string: license) {
                             Link("CC BY 4.0 · image license", destination: url).font(.caption2)
                         }
                         Text("Reference imagery, not a live view.").font(.caption2).foregroundStyle(.secondary)
                     }
+                    } else {
+                        SatelliteModelIllustration(kind: target.kind)
+                            .frame(height: 150)
+                        Text("Illustrative satellite model · no spacecraft photo available")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     Text(target.subtitle).font(.headline)
+                    LabeledContent("Object type", value: target.kind.name)
+                    if target.isStarlink {
+                        Text("Starlink constellation member. Launch vehicle and batch are not verified for this entry. Orbit raising and maneuvers can quickly change predictions.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     LabeledContent("NORAD catalog ID", value: String(target.id))
                     if let cached { LabeledContent("Catalog name", value: cached.elements.name) }
+                }
+                Section("Visibility footprint") {
+                    Text("The gold area on Earth shows where this satellite is above the horizon for a sea-level observer. Enable it in Settings, then choose View on globe to explore it.")
+                    Text("This is geometric line of sight. Darkness, sunlight, brightness, weather, terrain, and atmospheric refraction are not included.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section(tracking.isLive ? "Current predicted position" : "Paused predicted position") {
                     if let state {
@@ -79,15 +96,24 @@ struct SatelliteDetailsView: View {
                         Text("Follow is unavailable while Reduce Motion is enabled.").font(.footnote).foregroundStyle(.secondary)
                     }
                     Button("View on globe") { dismiss() }
-                    Button("Return to All", systemImage: "globe") {
+                    Button("Back to previous globe view", systemImage: "arrow.uturn.backward") {
                         dismiss()
-                        returnToAll()
+                        closeSelection()
                     }
                 }
             }
             .navigationTitle(target.name)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        dismiss()
+                        closeSelection()
+                    } label: { Image(systemName: "xmark") }
+                    .accessibilityLabel("Close satellite selection")
+                    .accessibilityHint("Returns to your previous globe rotation and zoom.")
+                }
+            }
         }
         .tint(Color(red: 0.48, green: 0.87, blue: 0.77))
         .presentationDetents([.medium, .large])
@@ -100,5 +126,34 @@ struct SatelliteDetailsView: View {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "MMM d, HH:mm:ss 'UTC'"
         return formatter.string(from: date)
+    }
+}
+
+/// A clearly labeled schematic for catalog entries without a credited photograph.
+struct SatelliteModelIllustration: View {
+    let kind: SatelliteKind
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width / 150, size.height / 90)
+            context.translateBy(x: size.width / 2, y: size.height / 2)
+            context.scaleBy(x: scale, y: scale)
+            func box(_ rect: CGRect, _ color: Color) { context.fill(Path(rect), with: .color(color)) }
+            switch kind {
+            case .station:
+                box(CGRect(x: -55, y: -3, width: 110, height: 6), .white)
+                box(CGRect(x: -7, y: -35, width: 14, height: 70), .white)
+                for x in [-48, 25] { for y in [-33, 8] {
+                    box(CGRect(x: x, y: y, width: 23, height: 25), .orange)
+                } }
+            case .satellite:
+                box(CGRect(x: -50, y: -14, width: 37, height: 28), .blue)
+                box(CGRect(x: 13, y: -14, width: 37, height: 28), .blue)
+                box(CGRect(x: -12, y: -12, width: 24, height: 24), .white)
+            case .starlink:
+                box(CGRect(x: -45, y: -16, width: 30, height: 32), .white)
+                box(CGRect(x: -15, y: -16, width: 65, height: 32), .purple)
+            }
+        }
+        .accessibilityLabel("Illustrative \(kind.name) model")
     }
 }

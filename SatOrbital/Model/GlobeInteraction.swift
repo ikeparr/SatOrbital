@@ -14,7 +14,7 @@ struct GlobeCameraPose: Equatable, Sendable {
     static func focused(on position: SIMD3<Float>, distance: Float = 2.55) -> Self {
         let direction = simd_normalize(position)
         return Self(yaw: atan2(direction.x, direction.z),
-                    pitch: min(max(asin(min(max(direction.y, -1), 1)), -1.55), 1.55), distance: distance)
+                    pitch: min(max(asin(min(max(direction.y, -1), 1)), -1.55), 1.55), distance: max(distance, simd_length(position) + 1.45))
     }
 
     func interpolated(to target: Self, fraction: Float) -> Self {

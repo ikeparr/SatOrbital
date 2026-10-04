@@ -6,6 +6,14 @@ struct GlobeView: UIViewRepresentable {
     let selected: SatelliteTarget?
     let isActive: Bool
     let showsOrbit: Bool
+    let showsFootprint: Bool
+    let globeStyle: GlobeStyle
+    let displayDate: Date
+    let animationDate: Date
+    let playbackRate: Double
+    let isPlaying: Bool
+    let viewMode: OrbitViewMode
+    let orbitShell: OrbitShell
     let resetID: Int
     let cameraCommand: CameraCommand
     let isFollowing: Bool
@@ -33,7 +41,7 @@ struct GlobeView: UIViewRepresentable {
         surface.isMultipleTouchEnabled = true
         surface.addSubview(view)
         surface.accessibilityLabel = "Interactive Earth and the selected satellite"
-        surface.accessibilityHint = "Tap a visible satellite to select it. Drag to rotate. Pinch to zoom. The satellite menu provides accessible selection."
+        surface.accessibilityHint = "Tap a visible satellite to select it. Drag to rotate. Pinch to zoom. Search provides accessible selection."
         context.coordinator.install(in: view, interactionView: surface, onFailure: onFailure)
         return surface
     }
@@ -43,8 +51,13 @@ struct GlobeView: UIViewRepresentable {
         let scene = context.coordinator
         scene.onSelect = onSelect
         scene.onManualControl = onManualControl
+        scene.setView(mode: viewMode, shell: orbitShell, at: displayDate,
+                      animationDate: animationDate, rate: playbackRate, playing: isPlaying)
+        scene.setGlobeStyle(globeStyle)
+        scene.setSunlight(at: displayDate)
         scene.setInteraction(following: isFollowing, reducedMotion: reduceMotion)
-        scene.setFrames(frames, selected: selected)
+        scene.setFrames(frames, selected: selected, showsFootprint: showsFootprint)
+        scene.finishViewUpdate()
         scene.orbitEntity.isEnabled = showsOrbit && !frames.isEmpty
         scene.setActive(isActive)
         if scene.lastResetID != resetID {

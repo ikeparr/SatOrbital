@@ -36,12 +36,16 @@ struct OrbitalState: Sendable {
             throw OrbitError.invalidElements
         }
         let parameter = momentumSquared / mu
+        let rotation = EarthCoordinates.siderealAngle(at: date)
+        let cosine = cos(rotation), sine = sin(rotation)
         var points = [scenePosition]
         for index in 1..<samples {
             let angle = Double(index) / Double(samples) * 2 * .pi
             let direction = radial * cos(angle) + transverse * sin(angle)
             let position = direction * (parameter / (1 + simd_dot(eccentricity, direction)))
-            points.append(EarthCoordinates.scenePosition(EarthCoordinates.earthFixed(position, at: date)))
+            let fixed = SIMD3(cosine * position.x + sine * position.y,
+                              -sine * position.x + cosine * position.y, position.z)
+            points.append(EarthCoordinates.scenePosition(fixed))
         }
         points.append(points[0]) // Exact shared seam at the current satellite position.
         return points

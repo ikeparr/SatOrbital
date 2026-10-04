@@ -42,11 +42,11 @@ final class OrbitRepositoryTests: XCTestCase {
         let repo = OrbitRepository(cacheURL: url, client: client)
         let first = await repo.load(at: now)
         await client.set(.init(data: Data("[]".utf8), status: 200))
-        let failed = await repo.load(at: now.addingTimeInterval(7201))
+        let failed = await repo.load(at: now.addingTimeInterval(86401))
         XCTAssertEqual(failed.cached?.elements, first.cached?.elements)
         XCTAssertEqual(failed.cached?.fetchedAt, first.cached?.fetchedAt)
         XCTAssertNotNil(failed.notice)
-        _ = await repo.load(at: now.addingTimeInterval(7210))
+        _ = await repo.load(at: now.addingTimeInterval(86410))
         let count = await client.calls
         XCTAssertEqual(count, 2)
     }
@@ -57,7 +57,7 @@ final class OrbitRepositoryTests: XCTestCase {
         let repo = OrbitRepository(cacheURL: url, client: client)
         let result = await repo.load(at: now)
         XCTAssertNil(result.cached)
-        XCTAssertEqual(result.nextRequestAt.timeIntervalSince(now), 10800)
+        XCTAssertEqual(result.nextRequestAt.timeIntervalSince(now), 86400)
         let restarted = OrbitRepository(cacheURL: url, client: client)
         _ = await restarted.load(at: now.addingTimeInterval(3600))
         let count = await client.calls
@@ -96,7 +96,7 @@ final class OrbitRepositoryTests: XCTestCase {
 
     func testSavedDataIsAvailableBeforeNetworkRefresh() async throws {
         let (data, now, url) = try fixture()
-        let cached = CachedOrbit(elements: try OrbitalElements.decodeISS(data), fetchedAt: now.addingTimeInterval(-10800), isBundled: true)
+        let cached = CachedOrbit(elements: try OrbitalElements.decodeISS(data), fetchedAt: now.addingTimeInterval(-90000), isBundled: true)
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         let client = StubClient(.init(data: Data(), status: 503))
         let repo = OrbitRepository(cacheURL: url, seed: try encoder.encode(cached), client: client)
@@ -118,7 +118,7 @@ final class OrbitRepositoryTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         payload[0]["EPOCH"] = formatter.string(from: now.addingTimeInterval(-3600))
         await client.set(.init(data: try JSONSerialization.data(withJSONObject: payload), status: 200))
-        let older = await repo.load(at: now.addingTimeInterval(7201))
+        let older = await repo.load(at: now.addingTimeInterval(86401))
         XCTAssertEqual(older.cached?.elements, original.cached?.elements)
         XCTAssertEqual(older.cached?.fetchedAt, original.cached?.fetchedAt)
         XCTAssertNotNil(older.notice)
@@ -127,8 +127,8 @@ final class OrbitRepositoryTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "satellite-seeds", withExtension: "json", subdirectory: "Fixtures"))
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let seeds = try decoder.decode([CachedOrbit].self, from: Data(contentsOf: url))
-        XCTAssertEqual(Set(seeds.map { $0.elements.catalogID }), Set(SatelliteTarget.allCases.map(\.id)))
-        for target in SatelliteTarget.allCases {
+        XCTAssertTrue(Set(seeds.map { $0.elements.catalogID }).isSubset(of: Set(SatelliteTarget.allCases.map(\.id))))
+        for target in seeds.compactMap({ SatelliteTarget(rawValue: $0.elements.catalogID) }) {
             let seed = try XCTUnwrap(seeds.first { $0.elements.catalogID == target.id })
             let (_, _, cacheURL) = try fixture()
             let now = try XCTUnwrap(seed.elements.epoch).addingTimeInterval(300)

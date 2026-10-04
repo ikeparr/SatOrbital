@@ -45,11 +45,11 @@ struct CelesTrakClient: OrbitHTTPClient {
     }
 }
 
-/// A single satellite query, at most once per two hours after success. A durable retry
+/// A single satellite query, at most once per 24 hours after success. A durable retry
 /// deadline also prevents repeated requests across launches after provider failures.
 actor OrbitRepository {
-    static let updateInterval: TimeInterval = 7_200
-    static let failureInterval: TimeInterval = 600
+    static let updateInterval: TimeInterval = 86_400
+    static let failureInterval: TimeInterval = 86_400
 
     private struct Envelope: Codable {
         var version = 1
@@ -123,6 +123,9 @@ actor OrbitRepository {
            saved.nextRequestAt <= now.addingTimeInterval(86_400),
            saved.cached == nil || valid(saved.cached!, at: now) {
             envelope = saved
+            if let fetched = saved.cached?.fetchedAt {
+                envelope?.nextRequestAt = max(saved.nextRequestAt, fetched.addingTimeInterval(Self.updateInterval))
+            }
         } else if let seed, let bundled = try? decoder.decode(CachedOrbit.self, from: seed), valid(bundled, at: now) {
             envelope = Envelope(cached: bundled, nextRequestAt: bundled.fetchedAt.addingTimeInterval(Self.updateInterval))
         } else {
@@ -164,5 +167,117 @@ actor OrbitRepository {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         return min(max(formatter.date(from: header)?.timeIntervalSince(now) ?? 0, 0), 86_400)
+    }
+}
+
+protocol CatalogHTTPDownloader: Sendable {
+    func fetchCatalog() async throws -> OrbitHTTPResponse
+}
+
+struct CelesTrakCatalogDownloader: CatalogHTTPDownloader {
+    func fetchCatalog() async throws -> OrbitHTTPResponse {
+        let url = URL(string: "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=JSON")!
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 40)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("SatOrbital/0.3 (iOS; satellite orbital viewer)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw OrbitError.invalidResponse }
+        return OrbitHTTPResponse(data: data, status: response.statusCode,
+                                 retryAfter: response.value(forHTTPHeaderField: "Retry-After"))
+    }
+}
+
+/// One shared, durable group download serves the entire curated catalog.
+/// Persist an attempt before downloading, and stop network requests for at least
+/// 24 hours after any provider error, including across application launches.
+actor CatalogOrbitClient: OrbitHTTPClient {
+    static let updateInterval: TimeInterval = 86_400
+    private struct Saved: Codable {
+        var records: [OrbitalElements]
+        var nextRequestAt: Date
+        var status: Int
+        var attemptedAt: Date? = nil
+    }
+    private let cacheURL: URL
+    private let downloader: any CatalogHTTPDownloader
+    private let clock: @Sendable () -> Date
+    private var saved: Saved
+    private var records: [Int: OrbitalElements]
+    private var pending: Task<Void, Never>?
+
+    init(cacheURL: URL, seed: [CachedOrbit] = [], downloader: any CatalogHTTPDownloader = CelesTrakCatalogDownloader(),
+         clock: @escaping @Sendable () -> Date = { Date() }) {
+        self.cacheURL = cacheURL; self.downloader = downloader; self.clock = clock
+        let now = clock()
+        let restored = (try? Data(contentsOf: cacheURL)).flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
+        if let restored, restored.nextRequestAt.timeIntervalSince1970.isFinite,
+           restored.nextRequestAt <= now.addingTimeInterval(86_400),
+           restored.records.allSatisfy({ (try? $0.validate()) != nil }) {
+            saved = restored
+            // Older group files stored a two-hour deadline, but not the attempt time.
+            let attempted = restored.attemptedAt ?? restored.nextRequestAt.addingTimeInterval(-7_200)
+            saved.nextRequestAt = max(restored.nextRequestAt, attempted.addingTimeInterval(Self.updateInterval))
+            saved.attemptedAt = attempted
+        } else {
+            let fetched = seed.map(\.fetchedAt).max() ?? .distantPast
+            saved = Saved(records: seed.map(\.elements),
+                          nextRequestAt: fetched.addingTimeInterval(Self.updateInterval), status: 200)
+        }
+        records = Dictionary(saved.records.map { ($0.catalogID, $0) }, uniquingKeysWith: { a, b in
+            (a.epoch ?? .distantPast) > (b.epoch ?? .distantPast) ? a : b
+        })
+    }
+
+    func fetchOrbit(catalogID: Int) async throws -> OrbitHTTPResponse {
+        if let pending {
+            await pending.value
+        } else if clock() >= saved.nextRequestAt {
+            saved.attemptedAt = clock()
+            saved.nextRequestAt = clock().addingTimeInterval(Self.updateInterval)
+            saved.status = 503
+            persist()
+            let task = Task { await self.downloadCatalog() }
+            pending = task
+            await task.value
+            pending = nil
+        }
+        guard saved.status == 200 else { return OrbitHTTPResponse(data: Data(), status: saved.status) }
+        guard let record = records[catalogID] else { throw OrbitError.invalidElements }
+        return OrbitHTTPResponse(data: try JSONEncoder().encode([record]), status: 200)
+    }
+
+    private func downloadCatalog() async {
+            do {
+                let response = try await downloader.fetchCatalog()
+                if response.status == 200 {
+                    guard response.data.count <= 32_000_000 else { throw OrbitError.invalidResponse }
+                    let decoded = try JSONDecoder().decode([OrbitalElements].self, from: response.data)
+                    let wanted = Set(SatelliteTarget.allCases.map(\.id))
+                    let valid = decoded.filter { wanted.contains($0.catalogID) && (try? $0.validate()) != nil }
+                    guard !valid.isEmpty else { throw OrbitError.invalidResponse }
+                    // Retain last usable records if a group omits an object or returns older elements.
+                    for record in valid {
+                        if (record.epoch ?? .distantPast) >= (records[record.catalogID]?.epoch ?? .distantPast) {
+                            records[record.catalogID] = record
+                        }
+                    }
+                    saved.records = Array(records.values)
+                    saved.status = 200
+                } else {
+                    saved.status = response.status
+                    let retry = OrbitRepository.retryDelay(response.retryAfter, now: clock())
+                    saved.nextRequestAt = clock().addingTimeInterval(max(Self.updateInterval, retry))
+                }
+            } catch {
+                saved.status = 503
+            }
+        persist()
+    }
+
+    private func persist() {
+        do {
+            try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(saved).write(to: cacheURL, options: .atomic)
+        } catch { /* Per-object repositories still provide their saved offline data. */ }
     }
 }

@@ -43,3 +43,15 @@ https://commons.wikimedia.org/wiki/File:Rear_view_of_Tiangong_Space_Station.jpg
 Licensed under Creative Commons Attribution 4.0 International:
 https://creativecommons.org/licenses/by/4.0/
 Images converted to PNG where needed; no visual changes. Reference imagery does not represent a live camera view.
+
+Additional catalog reference images
+Starlink: Wikideas1, Starlink 01 (2025), CC BY 4.0.
+https://commons.wikimedia.org/wiki/File:Starlink_01.webp
+https://creativecommons.org/licenses/by/4.0/
+Representative illustration, not a photograph of the selected spacecraft or verified V3 design.
+Source model and Earth-render links are documented on the linked attribution page.
+Landsat 8/9 line illustration: NASA / Ross Walter, public domain.
+https://commons.wikimedia.org/wiki/File:Landsat_8-9_line_art.png
+Landsat 9 illustration: NASA / Goddard Space Flight Center / Conceptual Image Lab.
+https://svs.gsfc.nasa.gov/13259/
+Originals converted to PNG where needed; no visual changes.
