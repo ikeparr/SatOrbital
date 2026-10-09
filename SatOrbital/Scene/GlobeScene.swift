@@ -45,6 +45,7 @@ final class GlobeScene: NSObject {
     private var viewMode = OrbitViewMode.earthFixed
     private var orbitShell = OrbitShell.all
     private var pendingShellFocus = false
+    private var renderedEarthAngle: Float = 0
     private var displayDate = Date()
     private var animationDate = Date()
     private var playbackRate: Double = 1
@@ -56,6 +57,10 @@ final class GlobeScene: NSObject {
     private var flightElapsed: TimeInterval = 0
     private var followsSatellite = false
     private var reducedMotion = false
+    private var observerPlace: ObserverPlace?
+    private var observerMarker: ModelEntity?
+    var isChoosingPlace = false
+    var onPlacePicked: ((ObserverPlace) -> Void)?
     var onSelect: ((SatelliteTarget) -> Void)?
     var onManualControl: (() -> Void)?
     private var isActive = true
@@ -159,7 +164,8 @@ final class GlobeScene: NSObject {
 
     private func updateReferenceFrames() {
         let date = sceneDate()
-        earth.orientation = simd_quatf(angle: earthRotation(at: date), axis: [0, 1, 0])
+        renderedEarthAngle = earthRotation(at: date)
+        earth.orientation = simd_quatf(angle: renderedEarthAngle, axis: [0, 1, 0])
         footprintEntity.orientation = earth.orientation
         orbitEntity.orientation = simd_quatf(angle: OrbitViewCoordinates.orbitAngle(mode: viewMode, at: date,
                                                   reference: referenceDate ?? date), axis: [0, 1, 0])
@@ -648,9 +654,33 @@ final class GlobeScene: NSObject {
         startFlight(to: .focused(on: worldPosition(frame, at: Date())))
     }
 
+    func setObserverPlace(_ place: ObserverPlace?) {
+        guard place != observerPlace else { return }
+        observerPlace = place
+        if let place {
+            if observerMarker == nil {
+                let marker = ModelEntity(mesh: .generateSphere(radius: 0.013),
+                                         materials: [UnlitMaterial(color: .systemPink)])
+                earth.addChild(marker)
+                observerMarker = marker
+            }
+            // Lift the small marker clear of the Earth texture/grid.
+            observerMarker?.position = place.scenePosition * 1.008
+            observerMarker?.isEnabled = true
+        } else { observerMarker?.isEnabled = false }
+    }
+
     @objc private func tapSatellite(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended, let view else { return }
         let location = gesture.location(in: view)
+        if isChoosingPlace {
+            if let ray = view.ray(through: location),
+               let place = EarthPlacePicking.place(origin: ray.origin, direction: ray.direction,
+                                                   earthAngle: renderedEarthAngle) {
+                onPlacePicked?(place)
+            }
+            return
+        }
         let candidates = SatelliteTarget.allCases.compactMap { target -> SatellitePickCandidate? in
             guard let satellite = satellites[target], satellite.isEnabled,
                   GlobePicking.isVisible(position: satellite.position, camera: pose.position),
