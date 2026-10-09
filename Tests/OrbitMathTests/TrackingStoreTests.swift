@@ -250,3 +250,40 @@ extension TrackingStoreTests {
         XCTAssertEqual(store.displayDate, paused)
     }
 }
+
+
+extension TrackingStoreTests {
+    func testFreshnessWarningsAreScopedToEachSatellite() async throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "satellite-seeds", withExtension: "json", subdirectory: "Fixtures"))
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let seeds = try decoder.decode([CachedOrbit].self, from: Data(contentsOf: url))
+        let now = try XCTUnwrap(UTCDate.parse("2026-09-23T18:00:00Z"))
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        var repositories: [SatelliteTarget: OrbitRepository] = [:]
+        for (target, epoch) in [(SatelliteTarget.iss, "2026-09-23T12:00:00Z"), (.hubble, "2026-09-20T12:00:00Z")] {
+            let original = try XCTUnwrap(seeds.first { $0.elements.catalogID == target.id })
+            var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original.elements)) as? [String: Any])
+            fields["EPOCH"] = epoch
+            let elements = try JSONDecoder().decode(OrbitalElements.self, from: JSONSerialization.data(withJSONObject: fields))
+            let record = CachedOrbit(elements: elements, fetchedAt: now, isBundled: false)
+            repositories[target] = OrbitRepository(cacheURL: directory.appending(path: "\(target.id).json"), catalogID: target.id,
+                seed: try encoder.encode(record), client: CatalogFixtureClient(data: Data()))
+        }
+        let store = TrackingStore(repositories: repositories, clock: { now })
+        await store.reloadVisible()
+        XCTAssertEqual(store.freshness, .stale)
+        XCTAssertEqual(store.freshness(for: .iss), .fresh)
+        XCTAssertEqual(store.freshness(for: .hubble), .stale)
+        XCTAssertNil(store.freshness(for: .tiangong))
+        XCTAssertEqual(store.modeLabel, "NOW · PREDICTED")
+        await store.select(.iss)
+        XCTAssertEqual(store.freshness(for: .iss), .fresh)
+        XCTAssertEqual(store.modeLabel, "NOW · PREDICTED")
+        await store.select(.hubble)
+        XCTAssertEqual(store.freshness(for: .hubble), .stale)
+        await store.select(nil)
+        XCTAssertEqual(store.modeLabel, "NOW · PREDICTED")
+    }
+}
