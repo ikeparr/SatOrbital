@@ -18,6 +18,9 @@ struct GlobeView: UIViewRepresentable {
     let cameraCommand: CameraCommand
     let isFollowing: Bool
     let reduceMotion: Bool
+    let observerPlace: ObserverPlace?
+    let isChoosingPlace: Bool
+    let onPlacePicked: (ObserverPlace) -> Void
     let onSelect: (SatelliteTarget) -> Void
     let onManualControl: () -> Void
     let onFailure: (String) -> Void
@@ -49,6 +52,10 @@ struct GlobeView: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) {
         view.accessibilityLabel = selected == nil ? "Interactive Earth and all satellites" : "Interactive Earth and the selected satellite"
         let scene = context.coordinator
+        view.accessibilityHint = isChoosingPlace ? "Tap Earth to choose a place. Coordinate entry is available in Observer place." : "Tap a satellite. Drag to rotate. Pinch to zoom."
+        scene.onPlacePicked = onPlacePicked
+        scene.isChoosingPlace = isChoosingPlace
+        scene.setObserverPlace(observerPlace)
         scene.onSelect = onSelect
         scene.onManualControl = onManualControl
         scene.setView(mode: viewMode, shell: orbitShell, at: displayDate,
