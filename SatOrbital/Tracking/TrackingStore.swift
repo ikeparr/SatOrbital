@@ -127,6 +127,10 @@ final class TrackingStore: ObservableObject {
         if values.contains(.stale) { return .stale }
         return values.isEmpty ? nil : .fresh
     }
+    func freshness(for target: SatelliteTarget) -> OrbitFreshness? {
+        epoch(for: target).map { OrbitFreshness.assess(epoch: $0, at: now) }
+    }
+
     private func epoch(for target: SatelliteTarget) -> Date? {
         guard let elements = results[target]?.cached?.elements else { return nil }
         if let saved = epochCache[target], saved.elements == elements { return saved.date }
@@ -143,7 +147,6 @@ final class TrackingStore: ObservableObject {
         if predictionError != nil { return "POSITION UNAVAILABLE" }
         if !isLive { return "PAUSED · PREDICTED" }
         if !isCurrentTime { return "\(Int(playbackRate))× · PREDICTED" }
-        if freshness == .stale { return "NOW · STALE ELEMENTS" }
         return "NOW · PREDICTED"
     }
 
