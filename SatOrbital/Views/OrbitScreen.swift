@@ -14,6 +14,14 @@ struct OrbitScreen: View {
     @AppStorage("orbitShell") private var orbitShellID = OrbitShell.all.rawValue
     private var orbitViewMode: OrbitViewMode { OrbitViewMode(rawValue: orbitViewModeID) ?? .earthFixed }
     private var orbitShell: OrbitShell { OrbitShell(rawValue: orbitShellID) ?? .all }
+    @AppStorage("observerPlace") private var observerPlaceValue = ""
+    private var observerPlace: ObserverPlace? { ObserverPlace.restore(observerPlaceValue) }
+    @State private var showsSky = false
+    @State private var skyPlace: ObserverPlace?
+    @State private var pendingSkyPlace: ObserverPlace?
+    @State private var showsPlaceSelection = false
+    @State private var isChoosingPlace = false
+    @State private var pickedPlace: ObserverPlace?
     @State private var showsTimeControls = false
     @State private var timeAnchor = Date()
     @State private var timeOffset: Double = 0
@@ -47,6 +55,37 @@ struct OrbitScreen: View {
         .background(background.ignoresSafeArea())
         .foregroundStyle(.white)
         .tint(accent)
+        .fullScreenCover(isPresented: $showsSky) {
+            if let skyPlace { ObserverSkyView(tracking: tracking, place: skyPlace) }
+        }
+        .sheet(isPresented: $showsPlaceSelection, onDismiss: {
+            if let place = pendingSkyPlace {
+                skyPlace = place
+                pendingSkyPlace = nil
+                showsSky = true
+            }
+        }) {
+            PlaceSelectionView(current: pickedPlace ?? observerPlace, hasSavedPlace: observerPlace != nil,
+                onSave: { observerPlaceValue = $0.storedValue; pickedPlace = nil },
+                onRemove: { observerPlaceValue = ""; pickedPlace = nil },
+                onPick: {
+                    showsPlaceSelection = false
+                    pickedPlace = nil
+                    isFollowing = false
+                    detailsTarget = nil
+                    isChoosingPlace = true
+                    Task { await tracking.select(nil) }
+                }, onViewSky: { place in
+                    observerPlaceValue = place.storedValue
+                    pickedPlace = nil
+                    pendingSkyPlace = place
+                    isChoosingPlace = false
+                    isFollowing = false
+                    detailsTarget = nil
+                    Task { await tracking.select(nil) }
+                    showsPlaceSelection = false
+                })
+        }
         .sheet(isPresented: $showsTimeControls) { timeControls }
         .sheet(isPresented: $showsAbout) { about }
         .sheet(isPresented: $showsSettings) { settings }
@@ -142,7 +181,7 @@ struct OrbitScreen: View {
         GlobeView(
             frames: tracking.frames,
             selected: tracking.selected,
-            isActive: scenePhase == .active,
+            isActive: scenePhase == .active && !showsSky,
             showsOrbit: showsOrbit,
             showsFootprint: showsFootprint,
             globeStyle: globeStyle,
@@ -156,7 +195,14 @@ struct OrbitScreen: View {
             cameraCommand: cameraCommand,
             isFollowing: isFollowing,
             reduceMotion: reduceMotion,
-            onSelect: { choose($0, showDetails: true) },
+            observerPlace: observerPlace,
+            isChoosingPlace: isChoosingPlace,
+            onPlacePicked: { place in
+                isChoosingPlace = false
+                pickedPlace = place
+                showsPlaceSelection = true
+            },
+            onSelect: { isChoosingPlace = false; choose($0, showDetails: true) },
             onManualControl: { isFollowing = false },
             onFailure: { renderingError = $0 }
         )
@@ -177,7 +223,7 @@ struct OrbitScreen: View {
         .overlay(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 7) {
-                    Circle().fill(tracking.freshness == .stale ? .orange : tracking.isLive ? accent : .gray).frame(width: 5, height: 5)
+                    Circle().fill(tracking.isLive ? accent : .gray).frame(width: 5, height: 5)
                     Text(tracking.modeLabel)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .tracking(1.4)
@@ -192,6 +238,11 @@ struct OrbitScreen: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.65))
                 }
+                if let place = observerPlace {
+                    Label(place.name + " · " + place.coordinates, systemImage: "mappin")
+                        .font(.caption2).foregroundStyle(.pink)
+                        .lineLimit(2)
+                }
                 if showsFootprint, tracking.selected != nil, tracking.frame != nil {
                     Label("Above-horizon footprint", systemImage: "circle.fill")
                         .font(.caption2)
@@ -203,12 +254,25 @@ struct OrbitScreen: View {
             .allowsHitTesting(false)
         }
         .overlay(alignment: .bottom) {
-            Text(isFollowing ? "FOLLOWING \(tracking.selectionName.uppercased())" : "TAP A SATELLITE   ·   DRAG TO ROTATE")
+            Text(isChoosingPlace ? "TAP EARTH TO CHOOSE A PLACE" : isFollowing ? "FOLLOWING \(tracking.selectionName.uppercased())" : "TAP A SATELLITE   ·   DRAG TO ROTATE")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .tracking(1.3)
                 .foregroundStyle(.white.opacity(0.40))
                 .padding(.bottom, 14)
                 .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomLeading) {
+            Button {
+                if isChoosingPlace { isChoosingPlace = false }
+                else { pickedPlace = nil; showsPlaceSelection = true }
+            } label: {
+                Label(isChoosingPlace ? "Cancel" : "Place", systemImage: isChoosingPlace ? "xmark" : "mappin.and.ellipse")
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 12).frame(height: 44)
+                    .background(background.opacity(0.85), in: Capsule())
+            }
+            .accessibilityLabel(isChoosingPlace ? "Cancel choosing a place" : "Choose or edit observer place")
+            .padding(.leading, 18).padding(.bottom, 34)
         }
         .overlay(alignment: .bottomTrailing) {
             Menu {
@@ -238,7 +302,7 @@ struct OrbitScreen: View {
         VStack(spacing: 14) {
             if let message = renderingError ?? tracking.predictionError ?? tracking.notice {
                 Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(3)
-            } else if tracking.freshness == .stale {
+            } else if let selected = tracking.selected, tracking.freshness(for: selected) == .stale {
                 Text("Elements are over 48 hours old. Position accuracy may be reduced.")
                     .font(.caption2).foregroundStyle(.orange)
             }
@@ -326,6 +390,7 @@ struct OrbitScreen: View {
     }
 
     private func choose(_ target: SatelliteTarget?, showDetails: Bool = false) {
+        isChoosingPlace = false
         isFollowing = false
         if let target {
             setCategory(target.filterCategory, visible: true)
