@@ -1,6 +1,6 @@
 # SatOrbital
 
-SatOrbital is a *Work In Progress* native iPhone app for exploring Earth while tracking a selection of notable satellites. It renders an interactive, textured globe and shows the ISS, Tiangong, Hubble, and NOAA-20 (Eventually most/all satellites) at their predicted position for the selected time, along with its orbital path and key flight details. Eventually will add a feature to display where said satellite/station will be visible from Earth
+SatOrbital is a *Work In Progress* native iPhone app for exploring Earth while tracking a selection of notable satellites. It renders an interactive, textured globe and shows the ISS, Tiangong, Hubble, Starlink, NOAA-20, and various other LEO and GSO satellites at their predicted position for the selected time, along with its orbital path and key flight details. When a satellite is selected, you will see satellite general and orbital information, along with an indicator of where the satellite is currently visible from.
 
 The app calculates each satellite’s position from current orbital elements and displays its altitude, speed, and latitude and longitude. You can rotate and zoom the globe, pause the displayed time, and return to the current time and selected satellite position. Orbital data is cached on the device so a previously saved position can be shown offline.
 
@@ -8,7 +8,7 @@ Positions are calculated predictions, not live telemetry, and can differ from th
 
 This is a personal project, there are currently have no plans to actually TestFlight the app
 
-App screenshots:
+App screenshots (OUTDATED SCREEN SHOTS, WILL UPDATE SOON):
 
 <img width="301" height="655" alt="Simulator Screenshot - iPhone 17 Pro - 2026-09-23 at 22 14 30" src="https://github.com/user-attachments/assets/0c17d948-70ba-487c-b627-1b43b287865b" />
 
