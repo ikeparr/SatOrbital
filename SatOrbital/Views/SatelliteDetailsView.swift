@@ -5,6 +5,7 @@ struct SatelliteDetailsView: View {
     let target: SatelliteTarget
     @Binding var isFollowing: Bool
     let closeSelection: () -> Void
+    var observerPlace: ObserverPlace? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -14,6 +15,25 @@ struct SatelliteDetailsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let freshness = tracking.freshness(for: target), freshness != .fresh {
+                    Section("Orbital data age") {
+                        Text(freshness == .expired
+                             ? "This satellite’s orbital data is over seven days old. Its position is hidden until usable data is available."
+                             : "This satellite’s orbital data is over 48 hours old. Its predicted position and direction may be less accurate.")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if let place = observerPlace, let state,
+                   let observation = SkyObservation(place: place, satellite: state.earthFixedPosition) {
+                    Section("Sky from " + place.name) {
+                        LabeledContent("Direction", value: String(format: "%.1f° from north", observation.azimuthDegrees))
+                        LabeledContent("Elevation", value: String(format: "%.1f° above horizon", observation.elevationDegrees))
+                        LabeledContent("Distance from place", value: String(format: "%.0f km", observation.rangeKilometers))
+                        if !observation.isAboveHorizon { Text("This satellite is now below the horizon.").foregroundStyle(.secondary) }
+                        Text("Geometric position only; sunlight, darkness, brightness, weather, and terrain are not included.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 Section {
                     if let reference = target.referenceImage {
                     VStack(alignment: .leading, spacing: 8) {
@@ -49,7 +69,7 @@ struct SatelliteDetailsView: View {
                     if let cached { LabeledContent("Catalog name", value: cached.elements.name) }
                 }
                 Section("Visibility footprint") {
-                    Text("The gold area on Earth shows where this satellite is above the horizon for a sea-level observer. Enable it in Settings, then choose View on globe to explore it.")
+                    Text(observerPlace == nil ? "The gold area on Earth shows where this satellite is above the horizon for a sea-level observer. Enable it in Settings, then choose View on globe to explore it." : "On the globe, selecting this satellite shows its above-horizon area when footprints are enabled in Settings.")
                     Text("This is geometric line of sight. Darkness, sunlight, brightness, weather, terrain, and atmospheric refraction are not included.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -70,17 +90,13 @@ struct SatelliteDetailsView: View {
                         LabeledContent("Orbital period", value: String(format: "%.1f minutes", cached.elements.periodSeconds / 60))
                         LabeledContent("Inclination", value: String(format: "%.2f°", cached.elements.inclination))
                         LabeledContent("Eccentricity", value: String(format: "%.6f", cached.elements.eccentricity))
-                        Text("The highlighted loop illustrates the current orbital shape. It is not a forecast of the path over Earth's surface.")
+                        Text(observerPlace == nil ? "The highlighted loop illustrates the current orbital shape. It is not a forecast of the path over Earth's surface." : "Select this satellite on the globe to explore its orbital shape. Orbit lines are not future ground tracks.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     Section("Orbital data") {
                         if let epoch = cached.elements.epoch {
                             LabeledContent("Element epoch", value: utc(epoch))
                             LabeledContent("Data age", value: String(format: "%.1f hours", abs(tracking.now.timeIntervalSince(epoch)) / 3600))
-                            if OrbitFreshness.assess(epoch: epoch, at: tracking.now) != .fresh {
-                                Text("These elements are aging. Predictions may be less accurate; positions disappear after seven days.")
-                                    .foregroundStyle(.orange)
-                            }
                         }
                         LabeledContent("Downloaded", value: utc(cached.fetchedAt))
                         LabeledContent("Source", value: cached.isBundled ? "Included CelesTrak snapshot" : "CelesTrak download")
@@ -88,17 +104,21 @@ struct SatelliteDetailsView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-                Section {
-                    Toggle("Follow satellite", isOn: $isFollowing)
-                        .disabled(state == nil || reduceMotion)
-                        .accessibilityHint("Keeps this satellite centered as it moves. Dragging or pinching stops following.")
-                    if reduceMotion {
-                        Text("Follow is unavailable while Reduce Motion is enabled.").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Button("View on globe") { dismiss() }
-                    Button("Back to previous globe view", systemImage: "arrow.uturn.backward") {
-                        dismiss()
-                        closeSelection()
+                if observerPlace != nil {
+                    Section { Button("Back to sky") { dismiss(); closeSelection() } }
+                } else {
+                    Section {
+                        Toggle("Follow satellite", isOn: $isFollowing)
+                            .disabled(state == nil || reduceMotion)
+                            .accessibilityHint("Keeps this satellite centered as it moves. Dragging or pinching stops following.")
+                        if reduceMotion {
+                            Text("Follow is unavailable while Reduce Motion is enabled.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Button("View on globe") { dismiss() }
+                        Button("Back to previous globe view", systemImage: "arrow.uturn.backward") {
+                            dismiss()
+                            closeSelection()
+                        }
                     }
                 }
             }
@@ -111,12 +131,12 @@ struct SatelliteDetailsView: View {
                         closeSelection()
                     } label: { Image(systemName: "xmark") }
                     .accessibilityLabel("Close satellite selection")
-                    .accessibilityHint("Returns to your previous globe rotation and zoom.")
+                    .accessibilityHint(observerPlace == nil ? "Returns to your previous globe rotation and zoom." : "Returns to the observer sky.")
                 }
             }
         }
         .tint(Color(red: 0.48, green: 0.87, blue: 0.77))
-        .presentationDetents([.medium, .large])
+        .presentationDetents(observerPlace == nil ? [.medium, .large] : [.large])
         .presentationDragIndicator(.visible)
     }
 
